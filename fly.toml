@@ -1,0 +1,33 @@
+# Fly.io configuration for the Wikinaut backend API.
+#
+# The ~5GB SQLite graph is NOT in the image — it lives on the "wikinaut_data" volume mounted at
+# /data. See docs/deployment.md for how to build the graph (on a GCE VM) and load it onto the
+# volume. If you change the app name below, also update the userscript's default backend URL and
+# its @connect directive.
+app = "wikinaut-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[mounts]
+  source = "wikinaut_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/ok"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
