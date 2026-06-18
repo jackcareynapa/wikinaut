@@ -38,15 +38,12 @@ ALL_PAGE_IDS = set()
 PAGE_TITLES_TO_IDS = {}
 for line in gzip.open(PAGES_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
   parts = line.rstrip('\n').split('\t')
-
-  if len(parts) < 2:
+  # Wikipedia dump pages rows always have 3 tab-separated fields; this guard skips
+  # the rare malformed row (e.g. page 71701640) rather than processing with partial data.
+  if len(parts) < 3:
+    print(f'[WARN] Malformed pages row (expected 3 fields, got {len(parts)}): {repr(line.rstrip(chr(10)))}', file=sys.stderr)
     continue
-
-  if len(parts) != 3:
-    print(f'[WARN] Malformed pages row: {repr(line)}', file=sys.stderr)
-
-  page_id = parts[0]
-  page_title = parts[1]
+  page_id, page_title, _ = parts
 
   ALL_PAGE_IDS.add(page_id)
   PAGE_TITLES_TO_IDS[page_title] = page_id
