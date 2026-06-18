@@ -62,7 +62,7 @@ Use the following [`gsutil`](https://cloud.google.com/storage/docs/gsutil) and
 database dump:
 
 ```bash
-$ gsutil -u <GCP_PROJECT_ID> cp gs://sdow-prod/dumps/<YYYYMMDD>/sdow.sqlite.gz .
+$ gsutil -u wikinaut cp gs://sdow-prod/dumps/<YYYYMMDD>/sdow.sqlite.gz .
 $ pigz -d sdow.sqlite.gz
 ```
 
@@ -195,7 +195,7 @@ hours given the following instructions:
 1.  SSH into the machine:
 
     ```bash
-    $ gcloud compute ssh sdow-db-builder-1 --project=sdow-prod
+    $ gcloud compute ssh wikinaut-db-builder-1 --project=wikinaut
     ```
 
 1.  Install required operating system dependencies:
@@ -234,7 +234,7 @@ hours given the following instructions:
 1.  SSH back into the machine if necessary:
 
     ```bash
-    $ gcloud compute ssh sdow-db-builder-1 --project=sdow-prod
+    $ gcloud compute ssh wikinaut-db-builder-1 --project=wikinaut
     ```
 
 1.  Re-attach to the screen session:

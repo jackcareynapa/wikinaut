@@ -65,7 +65,7 @@ From the GCE VM, copy the file to a Google Cloud Storage bucket (or any URL the 
 reach):
 
 ```bash
-gsutil cp dump/sdow.sqlite gs://<your-bucket>/sdow.sqlite
+gsutil cp dump/sdow.sqlite gs://wikinaut-dumps/sdow.sqlite
 ```
 
 ## Step 3 — Create the Fly app and volume
@@ -91,7 +91,7 @@ fly ssh console
 # inside the machine:
 cd /data
 apt-get update && apt-get install -y wget        # or use gsutil if you staged on GCS
-wget -O sdow.sqlite "https://storage.googleapis.com/<your-bucket>/sdow.sqlite"
+wget -O sdow.sqlite "https://storage.googleapis.com/wikinaut-dumps/sdow.sqlite"
 sqlite3 /data/searches.sqlite < /app/sql/createSearchesTable.sql
 exit
 ```
