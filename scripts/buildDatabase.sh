@@ -29,6 +29,7 @@ SHA1SUM_FILENAME="enwiki-$DOWNLOAD_DATE-sha1sums.txt"
 REDIRECTS_FILENAME="enwiki-$DOWNLOAD_DATE-redirect.sql.gz"
 PAGES_FILENAME="enwiki-$DOWNLOAD_DATE-page.sql.gz"
 LINKS_FILENAME="enwiki-$DOWNLOAD_DATE-pagelinks.sql.gz"
+LINKTARGET_FILENAME="enwiki-$DOWNLOAD_DATE-linktarget.sql.gz"
 
 
 # Make the output directory if it doesn't already exist and move to it
@@ -79,6 +80,7 @@ download_file "sha1sums" $SHA1SUM_FILENAME
 download_file "redirects" $REDIRECTS_FILENAME
 download_file "pages" $PAGES_FILENAME
 download_file "links" $LINKS_FILENAME
+download_file "linktarget" $LINKTARGET_FILENAME
 
 ##########################
 #  TRIM WIKIPEDIA DUMPS  #
@@ -129,27 +131,64 @@ else
   echo "[WARN] Already trimmed pages file"
 fi
 
-if [ ! -f links.txt.gz ]; then
+# NOTE: Around July 2024, Wikipedia normalized the `pagelinks` table. The target title columns
+# (`pl_namespace` / `pl_title`) were dropped in favor of a `pl_target_id` column which references a
+# new `linktarget` table. The links file is therefore built in three steps: trim `pagelinks` to
+# "<source page ID>\t<link target ID>", trim `linktarget` to "<link target ID>\t<target page title>",
+# then join them to recreate the legacy "<source page ID>\t<target page title>" format the rest of
+# the pipeline expects.
+if [ ! -f pagelinks.txt.gz ]; then
   echo
-  echo "[INFO] Trimming links file"
+  echo "[INFO] Trimming page links file"
 
   # Unzip
   # Remove all lines that don't start with INSERT INTO...
   # Split into individual records
-  # Only keep records in namespace 0
-  # Replace namespace with a tab
-  # Remove everything starting at the to page name's closing apostrophe
+  # Only keep links originating from a namespace 0 page (i.e. pl_from_namespace = 0)
+  # Replace the source page namespace with a tab, leaving "<source page ID>\t<link target ID>"
   # Zip into output file
   time pigz -dc $LINKS_FILENAME \
     | sed -n 's/^INSERT INTO `pagelinks` VALUES (//p' \
     | sed -e 's/),(/\'$'\n/g' \
-    | egrep "^[0-9]+,0,.*,0$" \
-    | sed -e $"s/,0,'/\t/g" \
-    | sed -e "s/',0//g" \
+    | egrep "^[0-9]+,0,[0-9]+$" \
+    | sed -e $"s/,0,/\t/" \
+    | pigz --fast > pagelinks.txt.gz.tmp
+  mv pagelinks.txt.gz.tmp pagelinks.txt.gz
+else
+  echo "[WARN] Already trimmed page links file"
+fi
+
+if [ ! -f linktarget.txt.gz ]; then
+  echo
+  echo "[INFO] Trimming link target file"
+
+  # Unzip
+  # Remove all lines that don't start with INSERT INTO...
+  # Split into individual records
+  # Only keep link targets in namespace 0
+  # Replace the namespace with a tab and strip the surrounding apostrophes from the title, leaving
+  # "<link target ID>\t<target page title>"
+  # Zip into output file
+  time pigz -dc $LINKTARGET_FILENAME \
+    | sed -n 's/^INSERT INTO `linktarget` VALUES (//p' \
+    | sed -e 's/),(/\'$'\n/g' \
+    | egrep "^[0-9]+,0,'" \
+    | sed -e $"s/,0,'/\t/" \
+    | sed -e "s/');$//" -e "s/'$//" \
+    | pigz --fast > linktarget.txt.gz.tmp
+  mv linktarget.txt.gz.tmp linktarget.txt.gz
+else
+  echo "[WARN] Already trimmed link target file"
+fi
+
+if [ ! -f links.txt.gz ]; then
+  echo
+  echo "[INFO] Resolving link target IDs to titles in page links file"
+  time python3 "$ROOT_DIR/replace_link_targets_in_links_file.py" linktarget.txt.gz pagelinks.txt.gz \
     | pigz --fast > links.txt.gz.tmp
   mv links.txt.gz.tmp links.txt.gz
 else
-  echo "[WARN] Already trimmed links file"
+  echo "[WARN] Already resolved link target IDs in page links file"
 fi
 
 
@@ -159,7 +198,7 @@ fi
 if [ ! -f redirects.with_ids.txt.gz ]; then
   echo
   echo "[INFO] Replacing titles in redirects file"
-  time python "$ROOT_DIR/replace_titles_in_redirects_file.py" pages.txt.gz redirects.txt.gz \
+  time python3 "$ROOT_DIR/replace_titles_in_redirects_file.py" pages.txt.gz redirects.txt.gz \
     | sort -S 100% -t $'\t' -k 1n,1n \
     | pigz --fast > redirects.with_ids.txt.gz.tmp
   mv redirects.with_ids.txt.gz.tmp redirects.with_ids.txt.gz
@@ -170,7 +209,7 @@ fi
 if [ ! -f links.with_ids.txt.gz ]; then
   echo
   echo "[INFO] Replacing titles and redirects in links file"
-  time python "$ROOT_DIR/replace_titles_and_redirects_in_links_file.py" pages.txt.gz redirects.with_ids.txt.gz links.txt.gz \
+  time python3 "$ROOT_DIR/replace_titles_and_redirects_in_links_file.py" pages.txt.gz redirects.with_ids.txt.gz links.txt.gz \
     | pigz --fast > links.with_ids.txt.gz.tmp
   mv links.with_ids.txt.gz.tmp links.with_ids.txt.gz
 else
@@ -180,7 +219,7 @@ fi
 if [ ! -f pages.pruned.txt.gz ]; then
   echo
   echo "[INFO] Pruning pages which are marked as redirects but with no redirect"
-  time python "$ROOT_DIR/prune_pages_file.py" pages.txt.gz redirects.with_ids.txt.gz \
+  time python3 "$ROOT_DIR/prune_pages_file.py" pages.txt.gz redirects.with_ids.txt.gz \
     | pigz --fast > pages.pruned.txt.gz
 else
   echo "[WARN] Already pruned pages which are marked as redirects but with no redirect"
@@ -245,7 +284,7 @@ fi
 if [ ! -f links.with_counts.txt.gz ]; then
   echo
   echo "[INFO] Combining grouped links files"
-  time python "$ROOT_DIR/combine_grouped_links_files.py" links.grouped_by_source_id.txt.gz links.grouped_by_target_id.txt.gz \
+  time python3 "$ROOT_DIR/combine_grouped_links_files.py" links.grouped_by_source_id.txt.gz links.grouped_by_target_id.txt.gz \
     | pigz --fast > links.with_counts.txt.gz.tmp
   mv links.with_counts.txt.gz.tmp links.with_counts.txt.gz
 else
@@ -256,22 +295,22 @@ fi
 ############################
 #  CREATE SQLITE DATABASE  #
 ############################
-if [ ! -f sdow.sqlite ]; then
+if [ ! -f wikinaut.sqlite ]; then
   echo
   echo "[INFO] Creating redirects table"
-  time pigz -dc redirects.with_ids.txt.gz | sqlite3 sdow.sqlite ".read $ROOT_DIR/../sql/createRedirectsTable.sql"
+  time pigz -dc redirects.with_ids.txt.gz | sqlite3 wikinaut.sqlite ".read $ROOT_DIR/../sql/createRedirectsTable.sql"
 
   echo
   echo "[INFO] Creating pages table"
-  time pigz -dc pages.pruned.txt.gz | sqlite3 sdow.sqlite ".read $ROOT_DIR/../sql/createPagesTable.sql"
+  time pigz -dc pages.pruned.txt.gz | sqlite3 wikinaut.sqlite ".read $ROOT_DIR/../sql/createPagesTable.sql"
 
   echo
   echo "[INFO] Creating links table"
-  time pigz -dc links.with_counts.txt.gz | sqlite3 sdow.sqlite ".read $ROOT_DIR/../sql/createLinksTable.sql"
+  time pigz -dc links.with_counts.txt.gz | sqlite3 wikinaut.sqlite ".read $ROOT_DIR/../sql/createLinksTable.sql"
 
   echo
   echo "[INFO] Compressing SQLite file"
-  time pigz --best --keep sdow.sqlite
+  time pigz --best --keep wikinaut.sqlite
 else
   echo "[WARN] Already created SQLite database"
 fi

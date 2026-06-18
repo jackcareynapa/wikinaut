@@ -26,11 +26,10 @@ fi
 echo
 echo "[INFO] Uploading files to GCS"
 
-for file in 'output.txt' 'dump/sdow.sqlite.gz'; do
-  if [ -f $file ]; then
-    gsutil -u sdow-prod cp $file gs://sdow-prod/dumps/$DOWNLOAD_DATE/
+for file in output.txt dump/sdow.sqlite.gz; do
+  if [ -f "$file" ]; then
+    gsutil cp "$file" gs://wikinaut-dumps/dumps/
     echo "[INFO] $file uploaded to GCS"
   else
     echo "[WARN] $file does not exist, so not uploading"
   fi
-done

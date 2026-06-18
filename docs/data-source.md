@@ -12,28 +12,46 @@
 ## Data source
 
 Data for this project comes from Wikimedia, which creates [gzipped SQL dumps of the English language
-Wikipedia database](https://dumps.wikimedia.your.org/enwiki) twice monthly. The Six Degrees of
-Wikipedia SQLite database is built by downloading, trimming, and parsing the following three SQL
-tables:
+Wikipedia database](https://dumps.wikimedia.org/enwiki) twice monthly. The Wikinaut SQLite database
+is built by downloading, trimming, and parsing the following four SQL tables:
 
 1.  [`page`](https://www.mediawiki.org/wiki/Manual:Page_table) - Contains the ID and name (among
     other things) for all pages.
-2.  [`pagelinks`](https://www.mediawiki.org/wiki/Manual:Pagelinks_table) - Contains the source and
-    target pages all links.
-3.  [`redirect`](https://www.mediawiki.org/wiki/Manual:Redirect_table) - Contains the source and
+2.  [`pagelinks`](https://www.mediawiki.org/wiki/Manual:Pagelinks_table) - Contains the source page
+    and the **link target ID** for every link.
+3.  [`linktarget`](https://www.mediawiki.org/wiki/Manual:Linktarget_table) - Maps each link target
+    ID to its namespace and title.
+4.  [`redirect`](https://www.mediawiki.org/wiki/Manual:Redirect_table) - Contains the source and
     target pages for all redirects.
 
-For performance reasons, files are downloaded from the
-[`dumps.wikimedia.your.org` mirror](https://dumps.wikimedia.your.org/backup-index.html).
+Wikinaut only deals with actual Wikipedia pages, which in Wikipedia parlance means pages which
+belong to [namespace](https://en.wikipedia.org/wiki/Wikipedia:Namespace) `0`.
 
-Six Degrees of Wikipedia only deals with actual Wikipedia pages, which in Wikipedia parlance means
-pages which belong to [namespace](https://en.wikipedia.org/wiki/Wikipedia:Namespace) `0`.
+### The 2024 `pagelinks` schema change
+
+Before mid-2024, `pagelinks` stored link target titles directly (`pl_namespace` / `pl_title`).
+**Around July 1, 2024, Wikipedia normalized this:** those columns were dropped and replaced by
+`pl_target_id`, which references the new `linktarget` table. Upstream sdow's build scripts assumed
+the old schema and silently produce a broken graph against current dumps.
+
+Wikinaut's [`buildDatabase.sh`](../scripts/buildDatabase.sh) handles the new schema: it trims
+`pagelinks` to `<source page ID>\t<link target ID>` and `linktarget` to
+`<link target ID>\t<page title>` (namespace 0 only), then
+[`replace_link_targets_in_links_file.py`](../scripts/replace_link_targets_in_links_file.py) joins
+them to recreate the legacy `<source page ID>\t<page title>` links file the rest of the pipeline
+consumes. All build scripts run under Python 3.
 
 ## Get the data yourself
 
-Compressed versions of the Six Degrees of Wikipedia SQLite database (`sdow.sqlite.gz`) are available
-for download from ["requester pays"](https://cloud.google.com/storage/docs/requester-pays) Google
-Cloud Storage buckets. Check the [pricing page](https://cloud.google.com/storage/pricing) for the
+> The downloadable snapshots below are **upstream Six Degrees of Wikipedia** databases (last updated
+> December 2023) and pre-date the `linktarget` schema change. They still load fine if you just want a
+> working graph quickly, but for a current graph build your own with `buildDatabase.sh` (see below)
+> and deploy it per [`deployment.md`](./deployment.md).
+
+Compressed versions of the upstream Six Degrees of Wikipedia SQLite database (`sdow.sqlite.gz`) are
+available for download from
+["requester pays"](https://cloud.google.com/storage/docs/requester-pays) Google Cloud Storage
+buckets. Check the [pricing page](https://cloud.google.com/storage/pricing) for the
 full details. In general, copying is free from within Google Cloud Platform (e.g., to another Google
 Cloud Storage bucket or to a Google Cloud Engine VM) and around \$0.05 per compressed SQLite file
 otherwise.
@@ -155,14 +173,17 @@ $ ./buildDatabase.sh <YYYYMMDD>
 Generating the Six Degrees of Wikipedia database from a dump of Wikipedia takes approximately two
 hours given the following instructions:
 
-1.  Create a new [Google Compute Engine instance](https://console.cloud.google.com/compute/instances?project=sdow-prod)
-    from the `sdow-db-builder` instance template, which is configured with the following specs:
+1.  Create a new [Google Compute Engine instance](https://console.cloud.google.com/compute/instances)
+    with roughly the following specs:
 
-    1.  **Name:** `sdow-db-builder-1`
-    1.  **Zone:** `us-central1-c`
-    1.  **Machine Type:** n1-highmem-8 (8 vCPUs, 52 GB RAM)
-    1.  **Boot disk**: 256 GB SSD, Debian GNU/Linux 9 (stretch)
-    1.  **Notes**: Allow full access to all Cloud APIs.
+    1.  **Machine Type:** `e2-highmem-8` (8 vCPU / 64 GB) for a faster build, or `e2-highmem-4`
+        (4 vCPU / 32 GB) for a cheaper one-off. The memory headroom matters: the `linktarget` join
+        holds the whole namespace-0 link-target map in RAM (~4–7 GB), and the build runs
+        `sort -S 80%`. (16 GB also works, but sort spills to disk and it's tight.)
+    1.  **Boot disk:** 200 GB+ SSD — the dumps are only ~11 GB, but the pipeline keeps every
+        multi-GB intermediate file plus the final SQLite and its gzip. Recent Debian.
+    1.  **Notes:** allow read/write access to Cloud Storage if you'll stage the finished
+        `sdow.sqlite` in a bucket for the Fly deploy.
 
 1.  Set the default region and zone for the `gcloud` CLI:
 
@@ -181,19 +202,19 @@ hours given the following instructions:
 
     ```bash
     $ sudo apt-get -q update
-    $ sudo apt-get -yq install git pigz sqlite3
+    $ sudo apt-get -yq install git pigz sqlite3 python3 aria2
     ```
 
-1.  Clone this directory via HTTPS:
+1.  Clone this repository via HTTPS:
 
     ```bash
-    $ git clone https://github.com/jwngr/sdow.git
+    $ git clone https://github.com/jackcareynapa/wikinaut.git
     ```
 
 1.  Move to the proper directory and create a new screen in case the VM connection is lost:
 
     ```bash
-    $ cd sdow/scripts/
+    $ cd wikinaut/scripts/
     $ screen  # And then press <ENTER> on the screen that pops up
     ```
 

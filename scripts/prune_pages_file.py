@@ -5,9 +5,11 @@ redirect in the redirects file.
 Output is written to stdout.
 """
 
-import io
 import sys
 import gzip
+
+# Ensure stdout round-trips arbitrary page-title bytes safely.
+sys.stdout.reconfigure(encoding='utf-8', errors='surrogateescape')
 
 # Validate input arguments.
 if len(sys.argv) < 3:
@@ -28,13 +30,13 @@ if not REDIRECTS_FILE.endswith('.gz'):
 
 # Create a dictionary of redirects.
 REDIRECTS = {}
-for line in io.BufferedReader(gzip.open(REDIRECTS_FILE, 'r')):
+for line in gzip.open(REDIRECTS_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
   [source_page_id, _] = line.rstrip('\n').split('\t')
   REDIRECTS[source_page_id] = True
 
 # Loop through the pages file, ignoring pages which are marked as redirects but which do not have a
 # corresponding redirect in the redirects dictionary, printing the remaining pages to stdout.
-for line in io.BufferedReader(gzip.open(PAGES_FILE, 'r')):
+for line in gzip.open(PAGES_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
   [page_id, page_title, is_redirect] = line.rstrip('\n').split('\t')
 
   if is_redirect == '0' or page_id in REDIRECTS:

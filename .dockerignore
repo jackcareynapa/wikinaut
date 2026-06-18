@@ -1,0 +1,21 @@
+# Keep the build context small. The image only needs requirements.txt, sdow/, and sql/.
+.git
+.github
+website
+scripts
+docs
+sketch
+config
+env
+dump
+*.sqlite
+*.sqlite.gz
+*.user.js
+*.md
+.prettierignore
+.prettierrc
+.pylintrc
+setup.cfg
+fly.toml
+Dockerfile
+.dockerignore

@@ -1,107 +1,99 @@
-# Contributing | SDOW
+# Contributing | Wikinaut
 
-Thank you for contributing to Six Degrees of Wikipedia!
+Thanks for contributing to Wikinaut!
 
-## Local setup
+There are two pieces:
 
-There are three main pieces you'll need to get set up running locally:
+1. **Backend** — the Python/Flask API (`sdow/`) plus the graph build scripts (`scripts/`).
+2. **Userscript** — `wikinaut.user.js`, the Tampermonkey frontend.
 
-1.  Mock SQLite database of Wikipedia links
-2.  Backend Python Flask web server
-3.  React + TypeScript frontend website built using Vite
+Note: the following instructions have only been tested on macOS.
 
-There is some larger set up you'll need to run initially as well as some recurring set up every time
-you want to run the service.
+## Backend: local setup
 
-Note: The following instructions have only been tested on macOS.
-
-### Initial setup
-
-The first step is to clone the repo and move into the created directory:
+Clone the repo and move into it:
 
 ```bash
-$ git clone git@github.com:jwngr/sdow.git
-$ cd sdow/
+git clone git@github.com:jackcareynapa/wikinaut.git
+cd wikinaut/
 ```
 
-Several dependencies are required to run the service:
-1.  [`sqlite3`](https://docs.python.org/3/library/sqlite3.html) - Data storage
-1.  [`nvm`](https://github.com/nvm-sh/nvm) - Manage Node and `npm` versions
-1.  [`pyenv`](https://github.com/pyenv/pyenv) - Manage Python and `pip` versions
-1.  [`virtualenv`](https://virtualenv.pypa.io/) - Avoid polluting global environment
+You'll need a few tools (install via [Homebrew](https://brew.sh/) on macOS):
 
-The simplest way to download these is via [Homebrew](https://github.com/pyenv/pyenv):
+1. [`sqlite3`](https://www.sqlite.org/) — data storage
+2. [`pyenv`](https://github.com/pyenv/pyenv) — manage Python versions (Python 3)
+3. [`virtualenv`](https://virtualenv.pypa.io/) — isolate dependencies
 
 ```bash
-## Install SQLite.
-$ brew install sqlite
-
-## Install nvm (Node + npm).
-$ brew install nvm
-$ nvm install node
-
-## Install + configure pyenv (Python + pip).
-$ brew install xz
-$ brew install pyenv 
-# Also configure pyenv path using instructions in link above.
-$ pyenv install 3
-
-## Install + configure  virtualenv.
-$ python -m pip install --user virtualenv
-# Also configure virtualenv path using instructions in link above.
+brew install sqlite pyenv
+pyenv install 3        # then configure pyenv per its docs
+python -m pip install --user virtualenv
 ```
 
-Once the required global dependencies are installed, install the project dependencies and generate
-a mock local database:
+Install project dependencies and generate a mock database (a ~35-page graph — no Wikipedia dump
+needed):
 
 ```bash
-# Run from root of repo.
-$ virtualenv env
-$ source env/bin/activate
-$ pip install -r requirements.txt
-$ python scripts/create_mock_databases.py
+# From the repo root
+virtualenv env
+source env/bin/activate
+pip install -r requirements.txt
+python scripts/create_mock_databases.py
 ```
 
-### Recurring setup
+### Run the backend
 
-Every time you want to run the service, you need to source your environment, start the backend Flask
-app, and the frontend website. You can run the backend and frontend apps in different tabs.
-
-To run the backend, open a new tab and run the following commands from the repo root:
+Every session, source your environment and start Flask. The mock `sdow.sqlite` /
+`searches.sqlite` live in `sdow/`, so run from there:
 
 ```bash
-# Run from root of repo.
-$ source env/bin/activate
-$ cd sdow/
-$ export FLASK_APP=server.py FLASK_DEBUG=1
-$ flask run
+source env/bin/activate
+cd sdow/
+export FLASK_APP=server.py FLASK_DEBUG=1
+flask run        # http://localhost:5000
 ```
 
-To run the frontend, open a new tab and run the following commands from the repo root:
+Smoke-test it:
 
 ```bash
-$ cd website/
-$ npm start
+curl http://localhost:5000/ok
+curl -X POST http://localhost:5000/paths \
+  -H 'content-type: application/json' \
+  -d '{"source":"1","target":"6"}'
 ```
 
-The service can be found at http://localhost:3000.
+### Python style
+
+2-space indentation, ~100-char lines, PEP 8 (see `.pylintrc` / `setup.cfg`). The graph build
+scripts are Python 3. Run `pylint sdow/` / `autopep8 --in-place --recursive sdow/` before sending
+changes.
+
+## Userscript: local setup
+
+1. Install [Tampermonkey](https://www.tampermonkey.net/).
+2. Install `wikinaut.user.js`. During development, point it at your local backend via
+   **⚙ Settings → Backend URL** → `http://localhost:5000` (you may need to approve the `@connect`
+   prompt).
+3. Open an English Wikipedia article and iterate.
+4. Syntax-check before committing: `node --check wikinaut.user.js`.
+
+The userscript keeps a clean split between the **engine** (`Routing`, `Titles`, `Storage`, `Links`,
+`Traversal`) and the **cosmetic layer** (`Figure`/ship, `Trail`, `Transition`/hyperspace, CSS). The
+highest-value, trickiest code is the DOM link-matching in `Links` — be careful there.
 
 ## Repo organization
 
-Here are some highlights of the directory structure and notable source files
-
-- `.github/` - Contribution instructions as well as issue and pull request templates
-- `config/` - Configuration files for services like NGINX, Gunicorn, and Supervisord
-- `docs/` - Documentation
-- `scripts/` - Scripts to do things like create a new version of the SDOW database, create a mock
-- `sdow/` - The Python Flask web server
-  - `server.py` - Main entry point which initializes the Flask web server
-  - `database.py` - Defines a `Database` class which simplifies querying the SDOW SQLite database
-  - `breadth_first_search.py` - The main search algorithm which finds the shortest path between pages
-  - `helpers.py` - Miscellaneous helper functions and classes
-- `sketch/` - Sketch logo files
-- `sql/` - SQLite table schemas
-- `website/` - The frontend React + TypeScript website, built using Vite
-- `.pylintrc` - Default configuration for `pylint`
-- `requirements.txt` - Requirements specification for installing project dependencies via `pip`
-- `setup.cfg` - Python PEP 8 autoformatting rules
+- `.github/` — contribution docs, issue/PR templates, Dependabot config
+- `config/` — legacy VM configs (nginx, gunicorn, supervisord)
+- `docs/` — documentation (including `deployment.md` and `data-source.md`)
+- `scripts/` — graph build pipeline and helper scripts
+- `sdow/` — the Python Flask web server
+  - `server.py` — Flask entry point
+  - `database.py` — SQLite query wrapper
+  - `breadth_first_search.py` — the bidirectional BFS
+  - `helpers.py` — Wikipedia API integration and error classes
+- `sql/` — SQLite table schemas
+- `wikinaut.user.js` — the Tampermonkey userscript (frontend)
+- `Dockerfile` / `fly.toml` — backend container + Fly.io deploy config
+- `requirements.txt` — Python dependencies
+- `.pylintrc` / `setup.cfg` — Python lint/format config
