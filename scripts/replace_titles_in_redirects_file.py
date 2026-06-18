@@ -31,9 +31,15 @@ if not REDIRECTS_FILE.endswith('.gz'):
 ALL_PAGE_IDS = set()
 PAGE_TITLES_TO_IDS = {}
 for line in gzip.open(PAGES_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [page_id, page_title, _] = line.rstrip('\n').split('\t')
-  ALL_PAGE_IDS.add(page_id)
-  PAGE_TITLES_TO_IDS[page_title] = page_id
+    parts = line.rstrip('\n').split('\t')
+
+    if len(parts) < 2:
+        continue
+
+    page_id, page_title = parts[:2]
+
+    ALL_PAGE_IDS.add(page_id)
+    PAGE_TITLES_TO_IDS[page_title] = page_id
 
 # Create a dictionary of redirects, replace page titles in the redirects file with their
 # corresponding IDs and ignoring pages which do not exist.
