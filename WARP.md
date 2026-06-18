@@ -122,7 +122,6 @@ format. All build scripts are Python 3. Preserve this join when touching dump pr
   without code changes.
 - **Host**: Fly.io always-on machine + a persistent volume at `/data` holding `sdow.sqlite`
   (`fly.toml`). See `docs/deployment.md`.
-- **Legacy**: `config/` still contains nginx/gunicorn/supervisord configs for a manual VM deploy.
 
 ## Mock vs Production Data
 

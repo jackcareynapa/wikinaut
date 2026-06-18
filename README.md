@@ -73,7 +73,6 @@ the Fly volume → `fly deploy`).
 - [Deployment](./docs/deployment.md) — deploy the backend to Fly.io.
 - [Data Source](./docs/data-source.md) — where the data comes from and how the graph is built.
 - [Local Setup](./.github/CONTRIBUTING.md) — set up your machine to run Wikinaut locally.
-- [Web Server Setup](./docs/web-server-setup.md) — the legacy nginx/gunicorn/supervisord VM setup.
 
 ## Algorithm
 

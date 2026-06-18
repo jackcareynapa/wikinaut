@@ -243,17 +243,4 @@ hours given the following instructions:
     $ screen -r
     ```
 
-1.  Copy the script output and the resulting SQLite file to the `sdow-prod` GCS bucket:
-
-    ```bash
-    $ ./uploadToGcs.sh YYYYMMDD
-    ```
-
-1.  Generate updated Wikipedia facts and copy them into the
-    [corresponding JSON file](../website/src/resources/wikipediaFacts.json):
-
-    ```bash
-    $ python generate_updated_wikipedia_facts.py
-    ```
-
 1.  Delete the VM to prevent incurring large fees.
