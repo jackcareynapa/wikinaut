@@ -5,7 +5,7 @@
 # volume. If you change the app name below, also update the userscript's default backend URL and
 # its @connect directive.
 app = "wikinaut-api"
-primary_region = "iad"
+primary_region = "sjc"
 
 [build]
   dockerfile = "Dockerfile"
