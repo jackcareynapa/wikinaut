@@ -1,4 +1,10 @@
-# Web server Setup | Six Degrees of Wikipedia
+# Web server Setup (legacy VM) | Wikinaut
+
+> **Superseded by [`deployment.md`](./deployment.md).** Wikinaut deploys the backend to Fly.io
+> (Docker + persistent volume). This document is the **legacy** manual nginx + gunicorn +
+> supervisord setup inherited from upstream Six Degrees of Wikipedia; the project IDs, the
+> `sixdegreesofwikipedia.com` domain, the `jwngr` home paths, and the email below are the original
+> author's — replace them with your own if you go this route.
 
 ## Table of contents
 
