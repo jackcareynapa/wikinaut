@@ -37,7 +37,17 @@ if not LINKS_FILE.endswith('.gz'):
 ALL_PAGE_IDS = set()
 PAGE_TITLES_TO_IDS = {}
 for line in gzip.open(PAGES_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [page_id, page_title, _] = line.rstrip('\n').split('\t')
+  parts = line.rstrip('\n').split('\t')
+
+  if len(parts) < 2:
+    continue
+
+  if len(parts) != 3:
+    print(f'[WARN] Malformed pages row: {repr(line)}', file=sys.stderr)
+
+  page_id = parts[0]
+  page_title = parts[1]
+
   ALL_PAGE_IDS.add(page_id)
   PAGE_TITLES_TO_IDS[page_title] = page_id
 
