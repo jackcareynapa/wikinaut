@@ -37,7 +37,13 @@ for line in gzip.open(REDIRECTS_FILE, 'rt', encoding='utf-8', errors='surrogatee
 # Loop through the pages file, ignoring pages which are marked as redirects but which do not have a
 # corresponding redirect in the redirects dictionary, printing the remaining pages to stdout.
 for line in gzip.open(PAGES_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [page_id, page_title, is_redirect] = line.rstrip('\n').split('\t')
+  parts = line.rstrip('\n').split('\t')
+  # Wikipedia dump pages rows always have 3 tab-separated fields; this guard skips
+  # the rare malformed row (e.g. page 71701640) rather than crashing on strict unpacking.
+  if len(parts) < 3:
+    print(f'[WARN] Malformed pages row (expected 3 fields, got {len(parts)}): {repr(line.rstrip(chr(10)))}', file=sys.stderr)
+    continue
+  page_id, page_title, is_redirect = parts
 
   if is_redirect == '0' or page_id in REDIRECTS:
     print('\t'.join([page_id, page_title, is_redirect]))

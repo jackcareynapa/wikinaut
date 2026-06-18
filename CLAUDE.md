@@ -45,7 +45,6 @@ sdow/             Python package: server.py (Flask app), breadth_first_search.py
                   database.py, helpers.py
 scripts/          buildDatabase.sh + friends — download + process Wikipedia dumps into SQLite
 sql/              SQLite table schemas
-config/           nginx / gunicorn / supervisord configs (legacy VM deploy)
 docs/             Documentation, including deployment.md (Fly.io) and data-source.md (build)
 wikinaut.user.js  The Tampermonkey userscript (Wikinaut frontend)
 Dockerfile        Backend container image (used by the Fly.io deploy)

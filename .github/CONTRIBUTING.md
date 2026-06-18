@@ -84,7 +84,6 @@ highest-value, trickiest code is the DOM link-matching in `Links` — be careful
 ## Repo organization
 
 - `.github/` — contribution docs, issue/PR templates, Dependabot config
-- `config/` — legacy VM configs (nginx, gunicorn, supervisord)
 - `docs/` — documentation (including `deployment.md` and `data-source.md`)
 - `scripts/` — graph build pipeline and helper scripts
 - `sdow/` — the Python Flask web server
