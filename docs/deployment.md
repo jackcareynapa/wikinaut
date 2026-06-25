@@ -2,7 +2,7 @@
 
 The Wikinaut backend is the forked `sdow` Flask API. It answers `POST /paths` (shortest-path
 queries) and `GET /ok` (health check) over the Wikipedia link graph stored in a single SQLite file
-(`sdow.sqlite`, ~5 GB for English Wikipedia). The userscript talks to this API.
+(`sdow.sqlite`, ~14 GB for English Wikipedia). The userscript talks to this API.
 
 This guide deploys it to **Fly.io** as an always-on container with the graph on a **persistent
 volume**. Serverless platforms (Vercel, Lambda, etc.) cannot host it: there is no persistent
@@ -40,7 +40,7 @@ the machine spec:
   and `buildDatabase.sh` runs `sort -S 80%` which wants buffer space. **32 GB is comfortable, 64 GB
   is generous.** 16 GB works but sort spills to disk and it's tight.
 - **Disk** — the dumps are only ~11 GB, but the pipeline *keeps every* multi-GB intermediate
-  (`links.*`, sorted, grouped, `with_counts`) plus the ~5 GB final SQLite and its `.gz`, so budget
+  (`links.*`, sorted, grouped, `with_counts`) plus the ~14 GB final SQLite and its `.gz`, so budget
   **~200 GB SSD**.
 
 1. Create a Compute Engine VM — **`e2-highmem-8`** (8 vCPU / 64 GB) for a faster build, or
@@ -65,8 +65,11 @@ From the GCE VM, copy the file to a Google Cloud Storage bucket (or any URL the 
 reach):
 
 ```bash
-gsutil cp dump/sdow.sqlite gs://wikinaut-dumps/sdow.sqlite
+gsutil cp dump/sdow.sqlite gs://wikinaut-dumps/wikinaut.sqlite
 ```
+
+> Note the object name (`wikinaut.sqlite`) differs from the filename the app opens (`sdow.sqlite`);
+> Step 4 renames it on the way onto the volume.
 
 ## Step 3 — Create the Fly app and volume
 
@@ -75,7 +78,7 @@ Install [flyctl](https://fly.io/docs/flyctl/install/), then from the repo root:
 ```bash
 fly auth login
 fly apps create wikinaut-api          # must match `app` in fly.toml (and the userscript default)
-fly volumes create wikinaut_data --size 6 --region iad   # >= your sdow.sqlite size, same region as fly.toml
+fly volumes create wikinaut_data --size 25 --region sjc   # region MUST match fly.toml's primary_region; size >= ~1.5x the DB (WAL + searches.sqlite headroom)
 fly deploy                            # builds the Dockerfile and boots one machine
 ```
 
@@ -83,26 +86,74 @@ The first boot has no database yet, so the health check will fail until Step 4 �
 
 ## Step 4 — Load the database onto the volume
 
-SSH into the machine and pull the graph onto `/data`, then seed an (empty) searches database from
-the bundled schema:
+⚠️ **Cold-start chicken-and-egg:** `server.py` opens *both* `sdow.sqlite` and `searches.sqlite` at
+import, so on an empty volume every worker crashes ~7 s after boot and the machine sits `stopped` —
+and `fly ssh console` can't attach to a stopped machine. So keep a machine alive with a no-op command
+first, load the data, then restore the real command. The runtime image is `python:3.12-slim` — **no
+`wget`, `curl`, or `sqlite3` CLI** — so use `python3` for everything.
+
+**1. Keep the machine alive** (machine ID from `fly status`):
 
 ```bash
-fly ssh console
-# inside the machine:
-cd /data
-apt-get update && apt-get install -y wget        # or use gsutil if you staged on GCS
-wget -O sdow.sqlite "https://storage.googleapis.com/wikinaut-dumps/sdow.sqlite"
-sqlite3 /data/searches.sqlite < /app/sql/createSearchesTable.sql
+fly machine update <machine-id> -C "sleep infinity" --yes && fly machine start <machine-id>
+```
+
+**2. Make the graph reachable from Fly.** Fastest is a server-side download straight from GCS
+(Google→Fly; your laptop isn't in the path). The object is private and the bucket has Public Access
+Prevention, so open it for the load and lock it back down afterwards:
+
+```bash
+gsutil pap set unspecified gs://wikinaut-dumps
+gsutil iam ch allUsers:objectViewer gs://wikinaut-dumps
+curl -sI https://storage.googleapis.com/wikinaut-dumps/wikinaut.sqlite | head -1   # expect "HTTP/2 200"
+```
+
+**3. Download onto the volume as `sdow.sqlite`** (note the rename from the bucket's `wikinaut.sqlite`)
+and seed an empty searches DB. The download is resumable — re-running continues from the partial
+file; **never put a GCP token on the Fly host**:
+
+```bash
+fly ssh console -a wikinaut-api
+# on the machine:
+python3 - <<'PY'
+import urllib.request, os, time
+url = "https://storage.googleapis.com/wikinaut-dumps/wikinaut.sqlite"
+dst = "/data/sdow.sqlite.part"
+TOTAL = int(urllib.request.urlopen(urllib.request.Request(url, method="HEAD")).headers["Content-Length"])
+size = lambda: os.path.getsize(dst) if os.path.exists(dst) else 0
+while size() < TOTAL:
+    try:
+        r = urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={size()}-"}), timeout=60)
+        with r, open(dst, "ab" if (size() == 0 or r.status == 206) else "wb") as f:   # 206 required to append
+            while (b := r.read(8388608)):
+                f.write(b)
+    except Exception as e:
+        print("retry:", e); time.sleep(2)
+os.replace(dst, "/data/sdow.sqlite")                                  # atomic rename to what the app opens
+import sqlite3                                                        # seed empty searches.sqlite
+c = sqlite3.connect("/data/searches.sqlite")
+c.executescript(open("/app/sql/createSearchesTable.sql").read()); c.commit(); c.close()
+PY
 exit
 ```
 
-> Alternative for the ~5 GB transfer: `fly sftp shell` from the machine that has the file, then
-> `put dump/sdow.sqlite /data/sdow.sqlite`.
+> No-exposure alternative (skip step 2): stream it through the SSH tunnel with your locally-authed
+> gsutil — `gsutil cp gs://wikinaut-dumps/wikinaut.sqlite - | fly ssh console -C 'cat > /data/sdow.sqlite.part'`,
+> then `mv` to `sdow.sqlite`. Slower (bounded by your uplink) and a single 14 GB stream is fragile;
+> make it resumable with `gsutil cat -r <offset>-` appends (see `CLAUDE.md`).
 
-Restart so the app picks up the database:
+**4. Lock the bucket back down:**
 
 ```bash
-fly machine restart
+gsutil iam ch -d allUsers:objectViewer gs://wikinaut-dumps
+gsutil pap set enforced gs://wikinaut-dumps
+```
+
+**5. Restore the real app.** `fly deploy` regenerates the machine config from the Dockerfile CMD,
+clearing the `sleep infinity` override and booting gunicorn with both DBs present:
+
+```bash
+fly deploy
 ```
 
 ## Step 5 — Verify

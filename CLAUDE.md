@@ -164,6 +164,35 @@ node --check wikinaut.user.js
 
 See `docs/deployment.md` for the full Fly.io deploy (GCE graph build → volume → `fly deploy`).
 
+## Operating the deployed Fly backend (hard-won gotchas)
+
+These bit us once; don't relearn them. (Full runbook: `docs/deployment.md` Step 4.)
+
+- **`server.py` opens BOTH `./sdow.sqlite` and `./searches.sqlite` at import time** (with gunicorn's
+  `--chdir /data`, those are `/data/sdow.sqlite` + `/data/searches.sqlite`). If *either* is missing on
+  the volume, every worker raises `IOError` and the machine crash-loops to `stopped`. Both files must
+  exist before the app can serve.
+- **A crash-looping machine is unreachable** — `fly ssh console` needs a *started* VM, but the app
+  exits ~7s after each boot when the DB is missing. To work on the volume (e.g. load the DB), first
+  keep the machine alive by overriding its command:
+  `fly machine update <id> -C "sleep infinity" --yes && fly machine start <id>`. When done, restore
+  the real command with `fly deploy` (regenerates machine config from the Dockerfile CMD).
+- **The image is `python:3.12-slim`: no `wget`, `curl`, or `sqlite3` CLI.** Use `python3` for both the
+  download (`urllib`) and for seeding searches.sqlite (the `sqlite3` *module* +
+  `executescript(open('/app/sql/createSearchesTable.sql').read())`).
+- **Loading the ~14 GB graph onto the volume:** stream it from GCS with your *locally*-authenticated
+  `gsutil` piped over `fly ssh`
+  (`gsutil cp gs://wikinaut-dumps/wikinaut.sqlite - | fly ssh console -C 'cat > /data/sdow.sqlite.part'`).
+  **Never copy a GCP access token onto the Fly host** (credential leakage; it's also blocked). A single
+  14 GB SSH stream is fragile and *will* drop, so make it **resumable**: read the current `.part` size
+  and append only the rest with `gsutil cat -r <offset>- … | fly ssh … 'cat >> …part'`. Guard the size
+  probe — if it returns empty (ssh hiccup), skip the round; defaulting to 0 re-appends from the start
+  and corrupts the file. `mv …part sdow.sqlite` only after the byte count matches the source exactly.
+- **Object/file name mismatch:** the bucket object is `wikinaut.sqlite`, but the app opens
+  `sdow.sqlite` — rename it on the way onto the volume.
+- **The Fly volume's region MUST match `fly.toml`'s `primary_region`** (`sjc`), or a booting machine
+  gets a fresh, empty volume instead of your data.
+
 ## Upstream reference
 
 - Forked from: `jwngr/sdow` (Six Degrees of Wikipedia)

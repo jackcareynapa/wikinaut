@@ -21,6 +21,10 @@ COPY sql/ ./sql/
 
 EXPOSE 8080
 
+# Serve the API. gunicorn runs from /data so server.py's relative './sdow.sqlite' /
+# './searches.sqlite' resolve onto the mounted volume; --pythonpath /app keeps the `sdow`
+# package importable. (To load/repair the volume, temporarily override with
+# `fly machine update <id> -C "sleep infinity"`, then restore with `fly deploy`.)
 CMD ["gunicorn", \
      "--chdir", "/data", \
      "--pythonpath", "/app", \
