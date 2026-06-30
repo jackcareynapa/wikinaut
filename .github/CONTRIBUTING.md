@@ -64,7 +64,7 @@ curl -X POST http://localhost:5000/paths \
 
 ### Python style
 
-2-space indentation, ~100-char lines, PEP 8 (see `.pylintrc` / `setup.cfg`). The graph build
+2-space indentation, ~100-char lines, PEP 8 (see `setup.cfg`). The graph build
 scripts are Python 3. Run `pylint sdow/` / `autopep8 --in-place --recursive sdow/` before sending
 changes.
 
@@ -95,4 +95,4 @@ highest-value, trickiest code is the DOM link-matching in `Links` — be careful
 - `wikinaut.user.js` — the Tampermonkey userscript (frontend)
 - `Dockerfile` / `fly.toml` — backend container + Fly.io deploy config
 - `requirements.txt` — Python dependencies
-- `.pylintrc` / `setup.cfg` — Python lint/format config
+- `setup.cfg` — Python lint/format config

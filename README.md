@@ -35,7 +35,17 @@ own Fly deployment).
    jumps through hyperspace to the next article, repeating until you arrive.
 
 If the live page no longer contains a link the graph expected (Wikipedia changed since the graph was
-built), Wikinaut flags the dead end so you can chart a fresh course from where you are.
+built), Wikinaut doesn't dead-end — it jumps straight to the canonical article by URL and picks the
+flight back up on the next page.
+
+## Known limitations
+
+- **The graph is a dated snapshot.** Paths are computed from a fixed Wikipedia dump. Links added to
+  live articles after that dump won't be flown; links removed since fall back to direct navigation.
+- **Cold starts.** The hosted backend scales to zero when idle, so the first **Chart Course** after a
+  while can take a few seconds while it wakes up.
+- **English Wikipedia only.** The userscript is scoped to `en.wikipedia.org` and the shipped graph is
+  English Wikipedia.
 
 ## Run / build the backend yourself
 
@@ -78,7 +88,7 @@ the Fly volume → `fly deploy`).
 
 The Wikipedia link graph is unweighted, so the backend uses **bidirectional breadth-first search**
 (forward from the source, backward from the target, stopping when the frontiers meet). It returns
-*all* shortest paths, which is what lets the player choose between equally-short routes. See
+*all* equally-short paths between the two articles; Wikinaut flies the first. See
 [CLAUDE.md](./CLAUDE.md) for notes on why BFS — not Dijkstra/A\* or a language rewrite — is the right
 tool here.
 

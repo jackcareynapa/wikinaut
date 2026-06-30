@@ -43,7 +43,7 @@
     figureSize: 56,
     minWalkDurationMs: 620,
     maxWalkDurationMs: 2200,
-    jumpDurationMs: 1500,
+    jumpDurationMs: 1300,
     autocompleteLimit: 6,
     autocompleteDebounceMs: 180,
     routeSketchMs: 900,
@@ -66,7 +66,7 @@
     streakA: '#FF00FF',
     streakB: '#C715DB',
     amber: '#FFB84C',
-    // Gunmetal hull tones for the fighter craft (matches spaceship.png).
+    // Gunmetal hull tones for the fighter craft.
     steelHi: '#C7D2E0',
     steel: '#8A97A8',
     steelDark: '#3A4453',
@@ -146,7 +146,7 @@
     }
 
     #wikinaut-panel::after {
-      /* HUD corner brackets (4 L-shapes), echoing spaceship.png's frame */
+      /* HUD corner brackets (4 L-shapes) framing the console like a cockpit display */
       content: '';
       position: absolute;
       inset: 5px;
@@ -527,6 +527,38 @@
       100% { transform: translate(-50%, 0); }
     }
 
+    /* Ignition: a white-hot flash and an expanding shock-ring at the engine bell. */
+    .wikinaut-ignition {
+      position: fixed;
+      width: 96px; height: 96px;
+      margin: -48px 0 0 -48px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,255,255,0.96), rgba(255,214,130,0.72) 28%, rgba(255,140,46,0.36) 54%, transparent 72%);
+      pointer-events: none;
+      z-index: 2147483005;
+      animation: wikinaut-ignition 540ms ease-out forwards;
+    }
+    @keyframes wikinaut-ignition {
+      0%   { transform: scale(0.2); opacity: 0; }
+      16%  { opacity: 1; }
+      100% { transform: scale(1.7); opacity: 0; }
+    }
+    .wikinaut-shockwave {
+      position: fixed;
+      width: 40px; height: 40px;
+      margin: -20px 0 0 -20px;
+      border-radius: 50%;
+      border: 2px solid rgba(255,210,140,0.9);
+      box-shadow: 0 0 18px rgba(255,170,70,0.7);
+      pointer-events: none;
+      z-index: 2147483005;
+      animation: wikinaut-shockwave 640ms cubic-bezier(.2,.7,.3,1) forwards;
+    }
+    @keyframes wikinaut-shockwave {
+      0%   { transform: scale(0.2); opacity: 0.9; }
+      100% { transform: scale(4.4); opacity: 0; }
+    }
+
     /* ── Settings drawer ───────────────────────────────────────────────── */
 
     #wikinaut-settings-section {
@@ -586,7 +618,18 @@
       will-change: transform;
     }
     #wikinaut-ship-shell[data-visible="true"] { opacity: 1; }
-    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; }
+    /* Soft engine aura so the craft reads against dense article text. */
+    #wikinaut-ship-shell::before {
+      content: '';
+      position: absolute;
+      inset: -45%;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(0,243,255,0.30), rgba(0,243,255,0.10) 46%, transparent 70%);
+      pointer-events: none;
+      z-index: -1;
+    }
+    /* Cyan rim-glow on the whole hull (doesn't fight the animated core/body filters). */
+    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 5px rgba(0,243,255,0.55)); }
 
     /* Gunmetal fighter: metallic hull, tinted canopy, glowing blue engine. */
     .wikinaut-ship-hull {
@@ -743,13 +786,17 @@
       100% { transform: scaleX(1) scaleY(1); opacity: 1; }
     }
 
-    /* During a jump the console fades right out so it can never block the target link. */
+    /* The console can never obstruct the ship or its target link while flying: it dims for
+       the whole flight, and during a jump it fades right out and goes click-through. */
     #wikinaut-panel { transition: opacity 220ms ease; }
-    #wikinaut-panel[data-jumping="true"] { opacity: 0.1; }
+    #wikinaut-panel[data-flying="true"] { opacity: 0.78; }
+    #wikinaut-panel[data-jumping="true"] { opacity: 0.08; pointer-events: none; }
 
     /* ── Link-anchored FX (reticle lock + landing burst) ──────────────────
        Spawned at the target link's rect inside the (reparented, above-page)
        jump layer, so the animation reads as originating from the link itself. */
+    /* Targeting reticle: snaps in from oversize with a quarter-turn (scan→lock), then
+       holds a steady pulse over the link the ship is locked onto. */
     .wikinaut-reticle {
       position: absolute;
       transform: translate(-50%, -50%);
@@ -757,32 +804,43 @@
       border-radius: 4px;
       box-shadow: 0 0 12px rgba(0,243,255,0.55), inset 0 0 10px rgba(0,243,255,0.18);
       pointer-events: none;
-      animation: wikinaut-reticle-pulse 1s ease-in-out infinite;
+      animation: wikinaut-reticle-lock 320ms cubic-bezier(.2,.8,.2,1) both,
+                 wikinaut-reticle-pulse 1.1s ease-in-out 320ms infinite;
     }
+    /* L-shaped corner brackets, the classic locked-on look. */
     .wikinaut-reticle::before,
     .wikinaut-reticle::after {
       content: '';
       position: absolute;
-      background: rgba(0,243,255,0.6);
+      left: -3px; right: -3px; top: -3px; bottom: -3px;
+      border: 2px solid var(--wn-cyan-glow);
+      pointer-events: none;
     }
-    .wikinaut-reticle::before { left: 4px; right: 4px; top: 50%; height: 1px; transform: translateY(-50%); }
-    .wikinaut-reticle::after  { top: 4px; bottom: 4px; left: 50%; width: 1px; transform: translateX(-50%); }
+    .wikinaut-reticle::before { border-right: none; border-bottom: none; width: 9px; height: 9px; right: auto; bottom: auto; }
+    .wikinaut-reticle::after  { border-left: none; border-top: none; width: 9px; height: 9px; left: auto; top: auto; }
+    @keyframes wikinaut-reticle-lock {
+      0%   { transform: translate(-50%,-50%) scale(1.9) rotate(-14deg); opacity: 0; }
+      60%  { opacity: 1; }
+      100% { transform: translate(-50%,-50%) scale(1) rotate(0deg); opacity: 1; }
+    }
     @keyframes wikinaut-reticle-pulse {
-      0%,100% { opacity: 0.5;  box-shadow: 0 0 8px rgba(0,243,255,0.4), inset 0 0 8px rgba(0,243,255,0.15); }
-      50%     { opacity: 1;    box-shadow: 0 0 16px rgba(0,243,255,0.7), inset 0 0 12px rgba(0,243,255,0.3); }
+      0%,100% { box-shadow: 0 0 8px rgba(0,243,255,0.4), inset 0 0 8px rgba(0,243,255,0.15); }
+      50%     { box-shadow: 0 0 18px rgba(0,243,255,0.75), inset 0 0 12px rgba(0,243,255,0.35); }
     }
 
     .wikinaut-landing-burst {
       position: absolute;
-      width: 56px;
-      height: 56px;
-      margin: -28px 0 0 -28px;
+      width: 64px;
+      height: 64px;
+      margin: -32px 0 0 -32px;
       border-radius: 50%;
       border: 2px solid var(--wn-cyan-glow);
-      box-shadow: 0 0 14px rgba(0,243,255,0.6);
+      box-shadow: 0 0 18px rgba(0,243,255,0.7), inset 0 0 12px rgba(0,243,255,0.4);
       pointer-events: none;
-      animation: wikinaut-landing-burst 600ms ease-out forwards;
+      animation: wikinaut-landing-burst 620ms ease-out forwards;
     }
+    /* Trailing second ring for a touchdown shock-wave. */
+    .wikinaut-landing-burst.secondary { border-color: var(--wn-cyan); animation-delay: 120ms; opacity: 0.75; }
     @keyframes wikinaut-landing-burst {
       0%   { transform: scale(0.12); opacity: 0.95; }
       100% { transform: scale(1);    opacity: 0; }
@@ -819,6 +877,26 @@
       .wikinaut-field { grid-column: 1 / -1; }
       .wikinaut-button:not(.icon) { padding-left: 9px; padding-right: 9px; }
       #wikinaut-settings-section { grid-template-columns: auto 1fr; }
+    }
+
+    /* ── Reduced motion ────────────────────────────────────────────────────
+       The JS flight path already collapses its timings and skips the warp/ignition
+       visuals when reduce is set; here we silence the remaining decorative CSS
+       keyframes (idle bob, scan, charge, orbit, launch shake/flame/smoke, hyperspace
+       streaks, reticle pulse, star-field drift) so nothing loops or jitters. */
+    @media (prefers-reduced-motion: reduce) {
+      #wikinaut-ship-shell .wikinaut-ship-body,
+      #wikinaut-ship-shell .wikinaut-ship-core,
+      #wikinaut-ship-shell .wikinaut-ship-thruster,
+      #wikinaut-root[data-shake="true"] #wikinaut-panel,
+      .wikinaut-gantry, .wikinaut-exhaust, .wikinaut-smoke-puff,
+      .wikinaut-warp, .wikinaut-warp-streak, .wikinaut-flash,
+      .wikinaut-reticle, .wikinaut-landing-burst,
+      .wikinaut-ignition, .wikinaut-shockwave,
+      #wikinaut-route-card {
+        animation: none !important;
+      }
+      #wikinaut-route-card { background-position: 0 0; }
     }
   `;
 
@@ -950,80 +1028,168 @@
     canvas: null,
     ctx: null,
     points: [],
+    sparks: [],
     _rafId: null,
     _lastPointTime: 0,
+    _dpr: 1,
 
     init() {
       const canvas = document.createElement('canvas');
       canvas.id = 'wikinaut-trail-canvas';
-      Trail._resize(canvas);
-      dom.root.prepend(canvas);
       Trail.canvas = canvas;
       Trail.ctx = canvas.getContext('2d');
+      Trail._resize(canvas);
+      dom.root.prepend(canvas);
       window.addEventListener('resize', () => Trail._resize(canvas), {passive: true});
     },
 
+    // Back the canvas at device resolution so the plume stays crisp on HiDPI screens,
+    // then draw in CSS pixels via a scaled transform.
     _resize(canvas) {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      Trail._dpr = dpr;
+      canvas.width = Math.round(window.innerWidth * dpr);
+      canvas.height = Math.round(window.innerHeight * dpr);
+      canvas.style.width = `${window.innerWidth}px`;
+      canvas.style.height = `${window.innerHeight}px`;
     },
 
     addPoint(x, y) {
       const now = performance.now();
-      if (now - Trail._lastPointTime < 24) return;
+      if (now - Trail._lastPointTime < 16) return;
       Trail._lastPointTime = now;
-      Trail.points.push({
-        x: x + CONFIG.figureSize / 2,
-        y: y + CONFIG.figureSize / 2,
-        t: now,
-        sparkle: Math.random() < 0.22,
-      });
+      const cx = x + CONFIG.figureSize / 2;
+      const cy = y + CONFIG.figureSize / 2;
+      Trail.points.push({x: cx, y: cy, t: now});
+      // Occasional ember flung off the engine wash, drifting and decaying on its own.
+      if (Math.random() < 0.5) {
+        Trail.sparks.push({
+          x: cx,
+          y: cy,
+          vx: (Math.random() - 0.5) * 0.9,
+          vy: (Math.random() - 0.5) * 0.9,
+          t: now,
+          life: 360 + Math.random() * 360,
+        });
+      }
+      if (Trail.points.length > 140) Trail.points.shift();
+      if (Trail.sparks.length > 70) Trail.sparks.shift();
+      if (!Trail._rafId) Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
+    },
+
+    // Radial shower of embers from a point — used for ignition and touchdown.
+    burst(x, y, count = 16) {
+      const now = performance.now();
+      for (let i = 0; i < count; i += 1) {
+        const a = Math.random() * Math.PI * 2;
+        const sp = 1.4 + Math.random() * 2.6;
+        Trail.sparks.push({
+          x, y,
+          vx: Math.cos(a) * sp,
+          vy: Math.sin(a) * sp * 0.8,
+          t: now,
+          life: 360 + Math.random() * 460,
+        });
+      }
+      if (Trail.sparks.length > 90) Trail.sparks.splice(0, Trail.sparks.length - 90);
       if (!Trail._rafId) Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
     },
 
     _draw() {
       const ctx = Trail.ctx;
       if (!ctx) return;
-
       const now = performance.now();
       const fadeMs = CONFIG.trailFadeMs;
 
-      ctx.clearRect(0, 0, Trail.canvas.width, Trail.canvas.height);
+      ctx.setTransform(Trail._dpr, 0, 0, Trail._dpr, 0, 0);
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       Trail.points = Trail.points.filter((p) => now - p.t < fadeMs);
+      Trail.sparks = Trail.sparks.filter((s) => now - s.t < s.life);
 
-      // Wake fades from bright cyan (fresh) toward purple (old) per the palette spec.
-      const start = hexToRgb(PALETTE.cyan);
-      const end = hexToRgb(Settings.get('trailColor') || PALETTE.purple);
+      const core = hexToRgb(PALETTE.cyanGlow); // hottest, at the nozzle
+      const mid = hexToRgb(Settings.get('travelerColor') || PALETTE.cyan);
+      const tail = hexToRgb(Settings.get('trailColor') || PALETTE.purple);
+      const mix = (c1, c2, t) => ({
+        r: Math.round(lerp(c1.r, c2.r, t)),
+        g: Math.round(lerp(c1.g, c2.g, t)),
+        b: Math.round(lerp(c1.b, c2.b, t)),
+      });
+      // Wake colour ramp: white-hot core → cyan body → cool tail.
+      const ramp = (age) => (age < 0.5 ? mix(core, mid, age / 0.5) : mix(mid, tail, (age - 0.5) / 0.5));
 
-      for (const pt of Trail.points) {
-        const age = (now - pt.t) / fadeMs;
-        const alpha = (1 - age) * (1 - age);
-        const radius = (pt.sparkle ? 1.4 : 2.4) + (1 - age) * 2.4;
-        const r = Math.round(lerp(start.r, end.r, age));
-        const g = Math.round(lerp(start.g, end.g, age));
-        const b = Math.round(lerp(start.b, end.b, age));
+      const pts = Trail.points;
+      const hasRibbon = pts.length > 1;
+      if (hasRibbon || Trail.sparks.length) {
+        // Additive blending fuses the overlapping segments into one continuous glow.
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
 
-        ctx.beginPath();
-        ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = pt.sparkle
-          ? `rgba(${hexToRgb(PALETTE.cyanGlow).r},${hexToRgb(PALETTE.cyanGlow).g},${hexToRgb(PALETTE.cyanGlow).b},${alpha.toFixed(3)})`
-          : `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
-        ctx.shadowColor = `rgba(${r},${g},${b},${(alpha * 0.8).toFixed(3)})`;
-        ctx.shadowBlur = 5 + (1 - age) * 10;
-        ctx.fill();
-        ctx.shadowBlur = 0;
+        if (hasRibbon) {
+          // 1) Connected, tapering ribbon — thick & white-hot at the ship, thinning and
+          //    cooling toward the tail. Drawn twice (soft underlay + bright core).
+          for (let pass = 0; pass < 2; pass += 1) {
+            for (let i = 1; i < pts.length; i += 1) {
+              const b = pts[i];
+              const age = (now - b.t) / fadeMs;
+              const e = 1 - age;
+              const c = ramp(age);
+              const widthBoost = pass === 0 ? 2.4 : 1;
+              ctx.lineWidth = (1 + e * e * 8) * widthBoost;
+              ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${(e * e * (pass === 0 ? 0.16 : 0.5)).toFixed(3)})`;
+              ctx.beginPath();
+              ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+              ctx.lineTo(b.x, b.y);
+              ctx.stroke();
+            }
+          }
+
+          // 2) Bright nozzle flare at the freshest point.
+          const head = pts[pts.length - 1];
+          const flare = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 18);
+          flare.addColorStop(0, 'rgba(255,255,255,0.95)');
+          flare.addColorStop(0.35, `rgba(${core.r},${core.g},${core.b},0.7)`);
+          flare.addColorStop(1, `rgba(${mid.r},${mid.g},${mid.b},0)`);
+          ctx.fillStyle = flare;
+          ctx.beginPath();
+          ctx.arc(head.x, head.y, 18, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 3) Embers (independent of the ribbon, so ignition/landing bursts show too).
+        for (const s of Trail.sparks) {
+          const sAge = (now - s.t) / s.life;
+          const e = 1 - sAge;
+          const px = s.x + s.vx * (now - s.t) * 0.06;
+          const py = s.y + s.vy * (now - s.t) * 0.06;
+          ctx.fillStyle = `rgba(${core.r},${core.g},${core.b},${(e * 0.9).toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(px, py, 0.6 + e * 1.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalCompositeOperation = 'source-over';
       }
 
-      if (Trail.points.length > 0) {
+      if (pts.length > 0 || Trail.sparks.length > 0) {
         Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
       } else {
         Trail._rafId = null;
       }
     },
 
+    // Drop the wake ribbon but keep any live embers (used at touchdown so the cruise
+    // plume vanishes while the landing sparks still scatter).
+    clearRibbon() {
+      Trail.points = [];
+    },
+
     clear() {
       Trail.points = [];
-      if (Trail.ctx) Trail.ctx.clearRect(0, 0, Trail.canvas.width, Trail.canvas.height);
+      Trail.sparks = [];
+      if (Trail.ctx) {
+        Trail.ctx.setTransform(Trail._dpr, 0, 0, Trail._dpr, 0, 0);
+        Trail.ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      }
       if (Trail._rafId) {
         cancelAnimationFrame(Trail._rafId);
         Trail._rafId = null;
@@ -1815,11 +1981,24 @@
       }
       LaunchSequence.hideDigit();
 
+      // Spool-up: the drive charges (core pulses) and the craft hunkers against the
+      // hold-downs — a short crouch storing energy before the bolts blow.
+      Figure.pose('grab');
+      if (!reduce) {
+        await animate(300, (p) => {
+          Figure.moveTo(pad.x, pad.y + Math.sin(p * Math.PI) * 6);
+        });
+      }
+
       // Ignition.
       Phase.set(PHASES.LAUNCHING);
       setStatus('Launch!');
       dom.panel.dataset.launch = 'launch';
       Figure.pose('push');
+
+      const start = {...runtime.figurePosition};
+      // Engine bell sits at the tail; the craft is nose-up, so the bell is below centre.
+      LaunchSequence.ignite(start.x + CONFIG.figureSize / 2, start.y + CONFIG.figureSize * 0.9);
 
       if (!reduce) {
         dom.root.dataset.shake = 'true';
@@ -1828,15 +2007,15 @@
         }, 1400);
       }
 
-      // Hold on the pad a beat while thrust builds (flame + smoke ignite), then climb
-      // hard off the pad — ease-IN so it accelerates like a rocket, rising well clear.
-      const start = {...runtime.figurePosition};
-      const riseY = clamp(start.y - 340, 8, start.y);
+      // Hold a beat while thrust builds (flame + smoke ignite, embers fly), then climb
+      // hard off the pad — ease-IN so it accelerates like a rocket, rising well clear of
+      // the console while the engine trail blooms into a plume behind it.
+      const riseY = clamp(start.y - 360, 8, start.y);
       if (reduce) {
         Figure.moveTo(start.x, riseY);
       } else {
-        await sleep(200);
-        await animate(950, (progress) => {
+        await sleep(170);
+        await animate(1000, (progress) => {
           const eased = easeInCubic(progress);
           Figure.moveTo(start.x, lerp(start.y, riseY, eased));
           Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
@@ -1847,6 +2026,20 @@
       // Retract the launch rig; the ship is airborne and the flight loop takes over.
       delete dom.panel.dataset.launch;
       Figure.pose('look');
+    },
+
+    // Ignition flourish at the engine bell: white-hot flash, a shock-ring, and embers.
+    ignite(x, y) {
+      Trail.burst(x, y, 22);
+      if (!dom.root || prefersReducedMotion()) return;
+      for (const cls of ['wikinaut-ignition', 'wikinaut-shockwave']) {
+        const el = document.createElement('div');
+        el.className = cls;
+        el.style.left = `${Math.round(x)}px`;
+        el.style.top = `${Math.round(y)}px`;
+        dom.root.append(el);
+        window.setTimeout(() => el.remove(), 820);
+      }
     },
 
     // Panel top-center, where the ship sits in the launch bay before ignition.
@@ -1892,6 +2085,7 @@
       runtime.isWalking = true;
       Phase.set(PHASES.FLYING);
       JourneyPortal.activate();
+      if (dom.panel) dom.panel.dataset.flying = 'true';
       try {
         const currentTitle = Titles.currentPageTitle();
         let currentIndex = Number.isInteger(state.currentIndex) ? state.currentIndex : 0;
@@ -1971,55 +2165,93 @@
       } finally {
         LinkFx.clearReticle();
         JourneyPortal.deactivate();
-        if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
+        if (dom.panel) {
+          delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
+          delete dom.panel.dataset.flying;
+        }
         runtime.isWalking = false;
       }
     },
 
-    // Fly the ship to the link along a banked arc while the page parallax-drifts under it
-    // (different easing + slight lag), so off-screen targets glide into view without the
-    // ship and page sliding in lockstep.
+    // Two phases, so the ship and page never slide on mismatched curves (the old jank):
+    //   1. SCROLL-TO-CENTER — if the link isn't already near the comfort line, scroll it
+    //      there while the ship flies straight along the scroll axis (down for a downward
+    //      scroll, up for an upward one), locked to the *same* eased clock. The link
+    //      rises/falls to meet the descending/climbing ship — they converge in the middle.
+    //   2. ARC — with the page now stationary and the link parked at the comfort line,
+    //      sweep a banked bézier from wherever the ship ended up onto the link.
     async cruiseToLink(link) {
       const speed = Settings.get('walkingPixelsPerSecond');
-
-      // Document-space anchor for the link center survives scrolling.
-      const rect = link.getBoundingClientRect();
-      const linkCenterX = rect.left + rect.width / 2;
-      const linkDocCenterY = rect.top + window.scrollY + rect.height / 2;
-
-      // Comfort band: where on screen the link should settle — below the masthead and
-      // well clear of the console panel, so it's decidedly visible for the jump.
-      const bandTop = 110;
-      const bandBottom = Math.max(bandTop + 60, panelObstacleRect().top - 100);
-      const desiredViewportY = clamp(linkDocCenterY - window.scrollY, bandTop, bandBottom);
-
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      const startScroll = window.scrollY;
-      const desiredScrollY = clamp(linkDocCenterY - desiredViewportY, 0, maxScroll);
-      const scrollDelta = desiredScrollY - startScroll;
-      // Where the link actually lands once scroll is clamped to page bounds.
-      const finalViewportY = linkDocCenterY - desiredScrollY;
-
-      const targetX = clamp(linkCenterX - CONFIG.figureSize / 2, 8, window.innerWidth - CONFIG.figureSize - 8);
-      const targetY = clamp(finalViewportY - CONFIG.figureSize / 2, 8, window.innerHeight - CONFIG.figureSize - 8);
-
       const start = {...runtime.figurePosition};
       Figure.show();
       Figure.pose('walking');
 
+      // Where the link should settle: upper-middle of the viewport (~40% down), kept
+      // below the masthead and clear of the console band.
+      const restViewportY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
+
+      const rect = link.getBoundingClientRect();
+      const linkVpCenterY = rect.top + rect.height / 2;
+      const linkDocCenterY = linkVpCenterY + window.scrollY;
+
+      // "In the middle" = the link center is already within ±15% of the viewport height of
+      // the rest line. If so, skip the scroll and just fly to it.
+      const centeredEnough = Math.abs(linkVpCenterY - restViewportY) <= window.innerHeight * 0.15;
+
+      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const desiredScrollY = centeredEnough
+        ? window.scrollY
+        : clamp(linkDocCenterY - restViewportY, 0, maxScroll);
+      const scrollDelta = desiredScrollY - window.scrollY;
+
       if (prefersReducedMotion()) {
         if (scrollDelta) window.scrollTo(0, desiredScrollY);
-        Figure.headToward(start.x, start.y, targetX, targetY);
-        Figure.moveTo(targetX, targetY);
+        const t = Figure.targetAtLink(link);
+        Figure.headToward(start.x, start.y, t.x, t.y);
+        Figure.moveTo(t.x, t.y);
         Figure.pose('look');
         return;
       }
 
-      // Flight path = a quadratic bézier that bows off the straight line so the ship
-      // sweeps a banked arc. The control point sits at the midpoint pushed perpendicular
-      // to the chord (always bowing "upward", away from the console), magnitude ∝ span.
-      const dx = targetX - start.x;
-      const dy = targetY - start.y;
+      // ── Phase 1: scroll the link to the rest line; the ship flies along the scroll axis
+      //    (same direction, same eased clock) so the two move as one and converge. ──
+      let shipY = start.y;
+      if (scrollDelta) {
+        const startScroll = window.scrollY;
+        // Ship tracks the scroll 1:1 in the same direction, capped so it never leaves the
+        // screen or sinks into the console.
+        const downBudget = Math.max(0, (panelObstacleRect().top - 40) - start.y);
+        const upBudget = Math.max(0, start.y - 70);
+        const shipTravel = scrollDelta > 0
+          ? Math.min(scrollDelta, downBudget)
+          : -Math.min(-scrollDelta, upBudget);
+        const shipEndY = start.y + shipTravel;
+
+        const scrollDur = clamp((Math.abs(scrollDelta) / speed) * 1000,
+          CONFIG.minWalkDurationMs, CONFIG.maxWalkDurationMs);
+        let prevY = start.y;
+        await animate(scrollDur, (progress) => {
+          const eased = easeInOutCubic(progress);
+          window.scrollTo(0, startScroll + scrollDelta * eased);
+          const y = start.y + shipTravel * eased;
+          Figure.headToward(start.x, prevY, start.x, y); // nose down / up along travel
+          Figure.moveTo(start.x, y);
+          Trail.addPoint(start.x, y);
+          JourneyPortal.ensureAbovePanel();
+          prevY = y;
+        });
+        shipY = shipEndY;
+      }
+
+      // ── Phase 2: page is stationary and the link is parked — arc the ship onto it. The
+      //    control point bows off the chord, perpendicular and away from the console. ──
+      const arcStart = {x: start.x, y: shipY};
+      const target = Figure.targetAtLink(link);
+      const targetX = target.x;
+      const targetY = target.y;
+
+      const dx = targetX - arcStart.x;
+      const dy = targetY - arcStart.y;
       const span = Math.hypot(dx, dy) || 1;
       let perpX = -dy / span;
       let perpY = dx / span;
@@ -2028,25 +2260,18 @@
         perpY = -perpY; // keep the bow pointing up
       }
       const bow = Math.min(span * 0.32, 200);
-      const ctrlX = (start.x + targetX) / 2 + perpX * bow;
-      const ctrlY = (start.y + targetY) / 2 + perpY * bow;
+      const ctrlX = (arcStart.x + targetX) / 2 + perpX * bow;
+      const ctrlY = (arcStart.y + targetY) / 2 + perpY * bow;
 
-      // Pace by the arc's (approx) length so longer sweeps don't feel rushed.
-      const arcPx = Math.max(span + bow * 0.6, Math.abs(scrollDelta) * 0.65, 1);
-      const duration = clamp((arcPx / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxWalkDurationMs * 1.5);
+      const arcPx = span + bow * 0.6;
+      const arcDur = clamp((arcPx / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxWalkDurationMs);
 
-      let prevX = start.x;
-      let prevY = start.y;
-      await animate(duration, (progress) => {
+      let prevX = arcStart.x;
+      let prevY = arcStart.y;
+      await animate(arcDur, (progress) => {
         const eased = easeInOutCubic(progress);
-        // The page drifts under the ship on a *different* curve (and slightly lagged), so
-        // it reads as parallax — the world sliding past — rather than tracking 1:1.
-        if (scrollDelta) {
-          const scrollEase = easeOutQuad(clamp((progress - 0.08) / 0.92, 0, 1));
-          window.scrollTo(0, startScroll + scrollDelta * scrollEase);
-        }
-        const fx = quadBezier(eased, start.x, ctrlX, targetX);
-        const fy = quadBezier(eased, start.y, ctrlY, targetY);
+        const fx = quadBezier(eased, arcStart.x, ctrlX, targetX);
+        const fy = quadBezier(eased, arcStart.y, ctrlY, targetY);
         // Bank to the path's heading (the bézier tangent ≈ frame-to-frame delta).
         Figure.headToward(prevX, prevY, fx, fy);
         Figure.moveTo(fx, fy);
@@ -2064,13 +2289,14 @@
       // The cruise already set the ship down on the link; re-snap (in case the page
       // shifted), settle, and charge the jump drive.
       const target = Figure.targetAtLink(link);
-      LinkFx.spawnReticle(link.getBoundingClientRect());  // lock onto the target link
       Figure.moveTo(target.x, target.y);
-      LinkFx.landingBurst(target.slitX, target.slitY);    // burst at the link, where the ship touches down
-      await sleep(220);
-      Trail.clear();
-      Figure.pose('grab');
-      await sleep(380);
+      Trail.clearRibbon();                                 // drop the cruise plume, keep embers
+      LinkFx.spawnReticle(link.getBoundingClientRect());   // scan→lock onto the target link
+      LinkFx.landingBurst(target.slitX, target.slitY);     // double shock-ring at touchdown
+      Trail.burst(target.slitX, target.slitY, 16);         // scattering touchdown embers
+      await sleep(240);
+      Figure.pose('grab');                                 // charge the jump drive
+      await sleep(360);
     },
 
     // Fallback when the link can't be found in the live DOM: persist the advanced route
@@ -2108,6 +2334,10 @@
       // the ship only exists for the duration of a flight.
       Figure.show();
       Figure.pose('victory');
+      const vx = runtime.figurePosition.x + CONFIG.figureSize / 2;
+      const vy = runtime.figurePosition.y + CONFIG.figureSize / 2;
+      LinkFx.landingBurst(vx, vy);   // celebratory shock-rings at the destination
+      Trail.burst(vx, vy, 26);       // and a shower of sparks
       dom.beginButton.disabled = true;
       runtime.route = route;
       await sleep(prefersReducedMotion() ? 600 : 1600);
@@ -2128,14 +2358,6 @@
       if (best && Links.visibilityScore(best) > 0.7) return best;
 
       return Links.nearestBelowViewport(candidates) || Links.nearestToViewport(candidates);
-    },
-
-    async waitUntilVisible(link, timeoutMs) {
-      const deadline = performance.now() + timeoutMs;
-      while (performance.now() < deadline) {
-        if (Links.visibilityScore(link) > 0.7) return;
-        await sleep(60);
-      }
     },
 
     candidates(title) {
@@ -2253,13 +2475,14 @@
     landingBurst(centerX, centerY) {
       if (!dom.ripLayer || prefersReducedMotion()) return;
       dom.ripLayer.dataset.open = 'true';
-      const burst = document.createElement('div');
-      burst.className = 'wikinaut-landing-burst';
-      burst.style.left = `${Math.round(centerX)}px`;
-      burst.style.top = `${Math.round(centerY)}px`;
-      dom.ripLayer.append(burst);
-      burst.addEventListener('animationend', () => burst.remove(), {once: true});
-      window.setTimeout(() => burst.remove(), 900);
+      for (const variant of ['', ' secondary']) {
+        const burst = document.createElement('div');
+        burst.className = `wikinaut-landing-burst${variant}`;
+        burst.style.left = `${Math.round(centerX)}px`;
+        burst.style.top = `${Math.round(centerY)}px`;
+        dom.ripLayer.append(burst);
+        window.setTimeout(() => burst.remove(), 900);
+      }
     },
   };
 
@@ -2288,7 +2511,7 @@
         Transition.renderHyperspace(anchor, 'depart');
         Figure.moveTo(anchor.slitX - CONFIG.figureSize / 2, anchor.slitY - CONFIG.figureSize / 2);
         Figure.pose('warp');
-        await sleep(CONFIG.jumpDurationMs * 0.72);
+        await sleep(560); // ship stretches to a point (matches the warp-stretch), then vanishes
         Figure.hide();
         await sleep(110);
       }
@@ -2313,24 +2536,11 @@
       });
     },
 
-    // Scroll the link into the upper-middle band (well clear of the panel) and fade the
-    // console, so the target is decidedly in view for the jump.
+    // The cruise already parks the link at the comfort line, so there's no scroll to do
+    // here — that second adjustment was the pre-jump jank. Just fade/disable the console
+    // (so it can never block the target) and re-lock the reticle for the jump.
     async ensureInView(link) {
       if (dom.panel) dom.panel.dataset.jumping = 'true';
-      const margin = 120;
-      const rect = link.getBoundingClientRect();
-      const panelTop = panelObstacleRect().top;
-      const clear = rect.top >= margin && rect.bottom <= panelTop - margin;
-      if (clear) return;
-
-      const docCenterY = rect.top + window.scrollY + rect.height / 2;
-      const bandLo = margin + 40;
-      const bandHi = Math.max(bandLo + 60, panelTop - margin);
-      const targetViewportY = clamp(docCenterY - window.scrollY, bandLo, bandHi);
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      const desired = clamp(docCenterY - targetViewportY, 0, maxScroll);
-      window.scrollTo({top: desired, behavior: prefersReducedMotion() ? 'auto' : 'smooth'});
-      await Links.waitUntilVisible(link, 1400);
       LinkFx.repositionReticle(link.getBoundingClientRect());
     },
 
@@ -2481,16 +2691,8 @@
     return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
   }
 
-  function easeOutCubic(value) {
-    return 1 - Math.pow(1 - value, 3);
-  }
-
   function easeInCubic(value) {
     return value * value * value;
-  }
-
-  function easeOutQuad(value) {
-    return 1 - (1 - value) * (1 - value);
   }
 
   // Quadratic bézier on one axis: p0 → (control) p1 → p2.
