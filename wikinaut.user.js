@@ -32,7 +32,7 @@
    *
    * The backend defaults to the hosted Fly.io API (CONFIG.apiBaseUrl) so the script works with no
    * setup. Players can point it at a self-hosted backend via Settings → Backend URL (persisted with
-   * GM storage). See docs/deployment.md.
+   * GM storage). See docs/web-server-setup.md.
    */
   const CONFIG = {
     apiBaseUrl: 'https://wikinaut-api.fly.dev',
@@ -42,10 +42,14 @@
     settingsStorageKey: 'wikinautSettings:v1',
     figureSize: 56,
     minWalkDurationMs: 620,
-    maxWalkDurationMs: 2200,
+    maxCruiseDurationMs: 12000, // safety net for pathological hops only, NOT a pacing knob —
+                                // the flight-speed setting is always honored below this cap
+                                // (capping compresses the flight and overrides the slider)
     jumpDurationMs: 1300,
     autocompleteLimit: 6,
     autocompleteDebounceMs: 180,
+    maxRoutes: 6,           // backend returns ALL equally-short paths; cap what the star map
+                            // renders/cycles so the chart stays legible
     routeSketchMs: 900,
     trailFadeMs: 1100,
     panelReservePx: 120,
@@ -74,7 +78,8 @@
   };
 
   const SETTINGS_DEFAULTS = {
-    walkingPixelsPerSecond: 560,
+    walkingPixelsPerSecond: 550,  // must sit on the speed slider's step grid (step=50), or
+                                  // the thumb snaps and disagrees with the stored value
     travelerColor: PALETTE.cyan,
     trailColor: PALETTE.purple,
   };
@@ -83,6 +88,15 @@
     contentRoot: '#mw-content-text',
     articleBody: '#mw-content-text .mw-parser-output',
     pageTitle: '#firstHeading',
+    // Wikipedia serves two article renderers with DIFFERENT internal-link href forms: the
+    // legacy parser emits relative hrefs (/wiki/Foo) while Parsoid read views (progressively
+    // rolled out across articles) emit protocol-relative absolute ones
+    // (//en.wikipedia.org/wiki/Foo). Matching only the legacy form finds ZERO links on a
+    // Parsoid page — every hop there would falsely report "link not on page". Select every
+    // form here; Titles.rawFromHref then validates host + /wiki/ path properly.
+    articleLink:
+      'a[href^="/wiki/"], a[href^="./"], a[href^="//en.wikipedia.org/wiki/"], ' +
+      'a[href^="https://en.wikipedia.org/wiki/"]',
   };
 
   // ─── CSS ────────────────────────────────────────────────────────────────────
@@ -94,7 +108,13 @@
       box-sizing: border-box;
     }
 
-    #wikinaut-root {
+    /* The ship shell and jump layer are MOVED to document.body while a journey is active
+       (JourneyPortal), so they must carry the palette variables themselves — a var() consumed
+       there with #wikinaut-root as the only declaration site resolves to nothing, and an
+       invalid custom property turns an SVG fill BLACK (this was the "gray flame" bug). */
+    #wikinaut-root,
+    #wikinaut-ship-shell,
+    #wikinaut-jump-layer {
       --wn-bg: ${PALETTE.bg};
       --wn-cyan: ${PALETTE.cyan};
       --wn-cyan-core: ${PALETTE.cyanCore};
@@ -312,6 +332,96 @@
       color: var(--wn-cyan-glow);
       margin-bottom: 6px;
     }
+    /* Errors get a distinct amber look so they read differently from routine progress text. */
+    #wikinaut-status[data-error="true"] {
+      color: var(--wn-amber);
+      text-shadow: 0 0 8px rgba(255,184,76,0.5);
+    }
+    #wikinaut-status[data-error="true"]::before { content: '⚠ '; }
+
+    /* Coarse phase accents on the panel frame (data-phase is the single source of truth for
+       "where are we in the flight loop"; data-launch/data-jumping/data-flying below are the
+       finer per-beat FX timing set alongside phase transitions by their owning callers). */
+    #wikinaut-panel[data-phase="plotting"] {
+      animation: wikinaut-plotting-scan 1.6s ease-in-out infinite;
+    }
+    @keyframes wikinaut-plotting-scan {
+      0%,100% { box-shadow: 0 0 0 1px rgba(0,243,255,0.08), 0 0 22px rgba(0,243,255,0.18), inset 0 0 28px rgba(0,243,255,0.06); }
+      50%     { box-shadow: 0 0 0 1px rgba(0,243,255,0.16), 0 0 30px rgba(0,243,255,0.32), inset 0 0 34px rgba(0,243,255,0.12); }
+    }
+    #wikinaut-panel[data-phase="stalled"] {
+      border-color: rgba(255,184,76,0.65);
+      box-shadow:
+        0 0 0 1px rgba(255,184,76,0.12),
+        0 0 22px rgba(255,184,76,0.25),
+        inset 0 0 28px rgba(255,184,76,0.08);
+    }
+
+    /* Launch computer emphasis: once a course is charted, LAUNCH becomes unmistakably the
+       next action — bright fill, steady glow, slow "ready" pulse — while CHART COURSE drops
+       back to the quiet secondary look. Driven purely by the phase machine (data-phase);
+       no class swapping in JS. The static box-shadow keeps the emphasis when the pulse is
+       silenced under reduced motion. */
+    #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button:not(:disabled) {
+      border-color: var(--wn-cyan);
+      background: linear-gradient(180deg, rgba(0,243,255,0.55), rgba(0,243,255,0.22));
+      color: #eaffff;
+      text-shadow: 0 0 10px rgba(224,255,255,0.9);
+      box-shadow: 0 0 16px rgba(0,243,255,0.6), inset 0 0 10px rgba(0,243,255,0.3);
+      animation: wikinaut-launch-ready 1.6s ease-in-out infinite;
+    }
+    @keyframes wikinaut-launch-ready {
+      0%,100% { box-shadow: 0 0 10px rgba(0,243,255,0.45), inset 0 0 8px rgba(0,243,255,0.25); }
+      50%     { box-shadow: 0 0 26px rgba(0,243,255,0.9), inset 0 0 14px rgba(0,243,255,0.45); }
+    }
+    #wikinaut-panel[data-phase="course-ready"] #wikinaut-chart-button {
+      border-color: rgba(0,243,255,0.35);
+      background: rgba(0,243,255,0.04);
+      color: var(--wn-cyan);
+      text-shadow: none;
+    }
+
+    /* Route pager: floats top-right of the route card whenever several equally-short routes
+       were charted — ◀ Route k/N ▶. Only meaningful before launch — CSS gates it to the
+       course-ready phase (the JS keeps it hidden entirely when there's just one route). */
+    #wikinaut-route-pager {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      z-index: 2;
+    }
+    #wikinaut-route-pager[hidden] { display: none; }
+    #wikinaut-route-prev, #wikinaut-route-next {
+      padding: 3px 7px;
+      font-size: 9px;
+      line-height: 1;
+    }
+    #wikinaut-route-label {
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--wn-cyan);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    #wikinaut-panel:not([data-phase="course-ready"]) #wikinaut-route-pager { display: none; }
+    /* Keep long status lines clear of the floating pager while it's shown. */
+    #wikinaut-panel[data-phase="course-ready"]
+      #wikinaut-route-card:has(#wikinaut-route-pager:not([hidden])) #wikinaut-status {
+      padding-right: 128px;
+    }
+
+    /* Alternate equally-short routes: dim, thin underlay fan beneath the selected path. */
+    .wikinaut-route-alt path {
+      fill: none;
+      stroke-width: 1;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 3 3;
+      opacity: 0.75;
+    }
 
     /* Star-chart screen — grows in place when a course is charted (data-expanded). */
     #wikinaut-starmap {
@@ -345,7 +455,7 @@
       stroke-width: 1.6;
       stroke-linecap: round;
       stroke-linejoin: round;
-      filter: drop-shadow(0 0 4px rgba(0,243,255,0.6));
+      filter: drop-shadow(0 0 4px rgba(0,243,255,0.6)) drop-shadow(0 0 9px rgba(0,243,255,0.35));
     }
 
     .wikinaut-wp {
@@ -364,8 +474,12 @@
       font-size: 9px;
       letter-spacing: 0.2px;
     }
-    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-cyan); filter: drop-shadow(0 0 6px rgba(0,243,255,0.6)); }
+    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-cyan); animation: wikinaut-wp-pulse 1.8s ease-in-out infinite; }
     .wikinaut-wp.current .wikinaut-wp-core { fill: var(--wn-cyan); }
+    @keyframes wikinaut-wp-pulse {
+      0%,100% { filter: drop-shadow(0 0 4px rgba(0,243,255,0.5)); }
+      50%     { filter: drop-shadow(0 0 10px rgba(0,243,255,0.95)); }
+    }
     .wikinaut-wp.current .wikinaut-wp-label { fill: var(--wn-cyan-glow); }
     .wikinaut-wp.next .wikinaut-wp-node { stroke: var(--wn-purple); }
     .wikinaut-wp.next .wikinaut-wp-core { fill: var(--wn-purple); }
@@ -442,37 +556,33 @@
     #wikinaut-panel[data-launch="arming"] .wikinaut-baydoor.right,
     #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.right { transform: translateX(94%); }
 
-    /* Ground-effect exhaust column rising from the pad base. */
+    /* Ground-effect bloom kicked up at the pad on ignition. The ship now carries its own
+       flame (see .wikinaut-ship-flame), so this is a one-shot blast left behind, not a column. */
     .wikinaut-exhaust {
       position: absolute;
       left: 50%;
-      bottom: 2px;
-      width: 30px;
-      height: 84px;
-      transform: translateX(-50%) scaleY(0);
+      bottom: 0;
+      width: 76px;
+      height: 30px;
+      transform: translateX(-50%) scale(0.3);
       transform-origin: 50% 100%;
-      background: linear-gradient(180deg,
-        rgba(255,255,255,0) 0%,
-        rgba(127,196,255,0.4) 14%,
-        rgba(255,236,150,0.9) 40%,
-        rgba(255,150,40,0.95) 72%,
-        rgba(255,70,20,0.55) 100%);
-      border-radius: 48% 48% 40% 40%;
-      filter: blur(2px) drop-shadow(0 0 14px rgba(255,150,40,0.85));
+      background: radial-gradient(ellipse at 50% 100%,
+        rgba(255,255,255,0.95) 0%,
+        rgba(255,236,150,0.85) 22%,
+        rgba(255,150,40,0.7) 46%,
+        rgba(255,70,20,0.32) 70%,
+        transparent 82%);
+      border-radius: 50%;
+      filter: blur(3px) drop-shadow(0 0 16px rgba(255,150,40,0.85));
       opacity: 0;
     }
     #wikinaut-panel[data-launch="launch"] .wikinaut-exhaust {
-      opacity: 1;
-      animation: wikinaut-flame-grow 640ms ease-out forwards, wikinaut-flame-flicker 90ms steps(2) infinite;
+      animation: wikinaut-ground-bloom 900ms ease-out forwards;
     }
-    @keyframes wikinaut-flame-grow {
-      0%   { transform: translateX(-50%) scaleY(0.1); }
-      45%  { transform: translateX(-50%) scaleY(1.18); }
-      100% { transform: translateX(-50%) scaleY(1); }
-    }
-    @keyframes wikinaut-flame-flicker {
-      0% { opacity: 0.82; filter: blur(2px) drop-shadow(0 0 12px rgba(255,150,40,0.8)); }
-      100% { opacity: 1; filter: blur(3px) drop-shadow(0 0 18px rgba(255,180,60,0.95)); }
+    @keyframes wikinaut-ground-bloom {
+      0%   { opacity: 0; transform: translateX(-50%) scale(0.3); }
+      18%  { opacity: 1; transform: translateX(-50%) scale(1.15); }
+      100% { opacity: 0; transform: translateX(-50%) scale(1.6); }
     }
 
     /* Billowing smoke clouds at the pad. */
@@ -668,6 +778,36 @@
       filter: drop-shadow(0 0 6px var(--wn-ship-color, ${PALETTE.blue}));
     }
 
+    /* Engine flame — anchored at the bell inside the rotated shell, so it always trails
+       straight off the ship's tail at any heading (and points down on nose-up launch).
+       Blended look: white-hot core → cyan plume in cruise; a longer white+orange torch at
+       launch. Outer group scales for length per state; inner group carries the flicker. */
+    .wikinaut-ship-flame { opacity: 0; transform-origin: 12px 36px; transition: opacity 160ms ease; }
+    .wikinaut-ship-flame-flicker { transform-origin: 12px 36px; }
+    .wikinaut-ship-flame-glow  { fill: url(#wikinaut-flame-glow); }
+    /* Plume + glow tint follow the Ship color setting (white-hot core and launch-orange
+       mid stay fixed); fallbacks guard against the shell ever losing its var host again. */
+    .wikinaut-ship-flame-plume {
+      fill: var(--wn-ship-color, ${PALETTE.cyan});
+      filter: drop-shadow(0 0 5px var(--wn-ship-color, ${PALETTE.cyan}));
+    }
+    .wikinaut-flame-glow-tint { stop-color: var(--wn-ship-color, ${PALETTE.cyan}); }
+    .wikinaut-ship-flame-mid   { fill: #FF9A3C; opacity: 0; }
+    .wikinaut-ship-flame-core  { fill: #FFFFFF; }
+    /* Cruise thrust: cyan flame, fast flicker (no orange). */
+    #wikinaut-ship-shell[data-pose="walking"] .wikinaut-ship-flame,
+    #wikinaut-ship-shell[data-pose="push"] .wikinaut-ship-flame { opacity: 1; }
+    #wikinaut-ship-shell[data-pose="walking"] .wikinaut-ship-flame-flicker,
+    #wikinaut-ship-shell[data-pose="push"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 110ms steps(2) infinite; }
+    /* Launch torch: longer, with a white-hot core + orange base (wins over cruise). */
+    #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame { opacity: 1; transform: scaleX(1.55); }
+    #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 80ms steps(2) infinite; }
+    #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-mid { opacity: 0.95; }
+    @keyframes wikinaut-flame-flicker2 {
+      0%   { transform: scaleX(0.9) scaleY(1.06); opacity: 0.82; }
+      100% { transform: scaleX(1.1) scaleY(0.94); opacity: 1; }
+    }
+
     .wikinaut-ship-body { transform-origin: 50% 50%; }
     #wikinaut-ship-shell[data-pose="idle"] .wikinaut-ship-body { animation: wikinaut-hover 2.2s ease-in-out infinite; }
     #wikinaut-ship-shell[data-pose="walking"] .wikinaut-ship-thruster,
@@ -678,6 +818,13 @@
     #wikinaut-ship-shell[data-pose="tug"] .wikinaut-ship-core { animation: wikinaut-charge 0.5s ease-in-out infinite alternate; }
     #wikinaut-ship-shell[data-pose="timid"] .wikinaut-ship-body { animation: wikinaut-charge 0.3s ease-in-out infinite alternate; }
     #wikinaut-ship-shell[data-pose="victory"] .wikinaut-ship-body { animation: wikinaut-orbit 2.4s linear infinite; }
+    /* Gentle engine-glow pulse while idling on the pad or holding a lock at a link. */
+    #wikinaut-ship-shell[data-pose="idle"] .wikinaut-ship-core,
+    #wikinaut-ship-shell[data-pose="look"] .wikinaut-ship-core { animation: wikinaut-core-pulse 2.4s ease-in-out infinite; }
+    @keyframes wikinaut-core-pulse {
+      0%,100% { filter: drop-shadow(0 0 4px var(--wn-ship-color, ${PALETTE.blue})); }
+      50%     { filter: drop-shadow(0 0 11px var(--wn-cyan-glow)); }
+    }
 
     @keyframes wikinaut-hover { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
     @keyframes wikinaut-thrust { from { opacity: 0.3; } to { opacity: 1; } }
@@ -697,6 +844,7 @@
       pointer-events: none;
       display: none;
       overflow: hidden;
+      isolation: isolate;   /* contain the warp layers' mix-blend-mode to this overlay */
     }
     #wikinaut-jump-layer[data-open="true"] { display: block; }
     #wikinaut-jump-layer[data-journey-portal="true"] { z-index: ${CONFIG.journeyPortalZ}; }
@@ -726,8 +874,8 @@
       width: 2px;
       transform-origin: 0 50%;
       border-radius: 2px;
-      background: linear-gradient(90deg, #ffffff, ${PALETTE.cyan} 30%, ${PALETTE.streakA} 60%, transparent);
-      box-shadow: 0 0 8px ${PALETTE.streakB};
+      background: linear-gradient(90deg, #ffffff, ${PALETTE.cyanGlow} 22%, ${PALETTE.cyan} 44%, ${PALETTE.streakA} 72%, transparent);
+      box-shadow: 0 0 12px ${PALETTE.streakB}, 0 0 4px #ffffff;
       animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.5,0,.85,.5) forwards;
     }
     .wikinaut-warp[data-mode="arrive"] .wikinaut-warp-streak {
@@ -752,19 +900,131 @@
       height: 40vmax;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      background: radial-gradient(circle, #ffffff 0%, ${PALETTE.cyanGlow} 26%, rgba(0,243,255,0.35) 46%, transparent 70%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, ${PALETTE.cyanGlow} 34%, rgba(0,243,255,0.5) 54%, transparent 76%);
       opacity: 0;
       animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
     }
     .wikinaut-flash[data-mode="arrive"] { animation: wikinaut-flash-in ${CONFIG.jumpDurationMs}ms ease-out forwards; }
     @keyframes wikinaut-flash {
       0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
-      70%  { opacity: 0.5; }
+      70%  { opacity: 0.6; }
       100% { opacity: 1; transform: translate(-50%,-50%) scale(1.1); }
     }
     @keyframes wikinaut-flash-in {
       0%   { opacity: 1; transform: translate(-50%,-50%) scale(1.1); }
       100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
+    }
+    /* Chromatic aberration: cyan + magenta fringes offset a few px, screened over the flash. */
+    .wikinaut-flash::before, .wikinaut-flash::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      mix-blend-mode: screen;
+      opacity: 0.55;
+    }
+    .wikinaut-flash::before { background: radial-gradient(circle, rgba(0,243,255,0.5) 0%, transparent 62%); transform: translate(-7px, -4px); }
+    .wikinaut-flash::after  { background: radial-gradient(circle, rgba(255,0,255,0.45) 0%, transparent 62%); transform: translate(7px, 4px); }
+
+    /* Starfield tunnel: concentric cyan/purple rings rushing forward behind the streaks. */
+    .wikinaut-warp-tunnel {
+      position: absolute;
+      left: var(--wn-slit-x, 50%);
+      top: var(--wn-slit-y, 50%);
+      width: 62vmax;
+      height: 62vmax;
+      transform: translate(-50%, -50%) scale(0.2);
+      border-radius: 50%;
+      background: repeating-radial-gradient(circle at 50% 50%,
+        rgba(255,255,255,0) 0,
+        rgba(0,243,255,0.18) 5px,
+        rgba(189,147,249,0.16) 11px,
+        rgba(255,255,255,0) 20px);
+      mix-blend-mode: screen;
+      filter: blur(1px);
+      opacity: 0;
+      animation: wikinaut-warp-tunnel ${CONFIG.jumpDurationMs}ms cubic-bezier(.55,0,.85,.5) forwards;
+    }
+    .wikinaut-warp-tunnel[data-mode="arrive"] { animation: wikinaut-warp-tunnel-in ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) forwards; }
+    @keyframes wikinaut-warp-tunnel {
+      0%   { opacity: 0; transform: translate(-50%,-50%) scale(0.2) rotate(0deg); }
+      25%  { opacity: 0.9; }
+      100% { opacity: 0; transform: translate(-50%,-50%) scale(2.6) rotate(42deg); }
+    }
+    @keyframes wikinaut-warp-tunnel-in {
+      0%   { opacity: 0; transform: translate(-50%,-50%) scale(2.6) rotate(-42deg); }
+      35%  { opacity: 0.9; }
+      100% { opacity: 0; transform: translate(-50%,-50%) scale(0.2) rotate(0deg); }
+    }
+
+    /* Expanding motion-blur shock ring from the jump point. */
+    .wikinaut-warp-ring {
+      position: absolute;
+      left: var(--wn-slit-x, 50%);
+      top: var(--wn-slit-y, 50%);
+      width: 24px;
+      height: 24px;
+      transform: translate(-50%, -50%) scale(0);
+      border-radius: 50%;
+      border: 3px solid rgba(160,255,255,0.9);
+      box-shadow: 0 0 26px 6px rgba(0,243,255,0.6), inset 0 0 18px rgba(255,255,255,0.7);
+      filter: blur(1.5px);
+      opacity: 0;
+      animation: wikinaut-warp-ring ${CONFIG.jumpDurationMs}ms cubic-bezier(.3,.7,.3,1) forwards;
+    }
+    .wikinaut-warp-ring[data-mode="arrive"] { animation-direction: reverse; }
+    @keyframes wikinaut-warp-ring {
+      0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
+      12%  { opacity: 1; }
+      100% { opacity: 0; transform: translate(-50%,-50%) scale(26); }
+    }
+
+    /* White-hot core bloom at the center of the jump. */
+    .wikinaut-warp-core {
+      position: absolute;
+      left: var(--wn-slit-x, 50%);
+      top: var(--wn-slit-y, 50%);
+      width: 13vmax;
+      height: 13vmax;
+      transform: translate(-50%, -50%) scale(0);
+      border-radius: 50%;
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, ${PALETTE.cyanGlow} 46%, rgba(0,243,255,0) 72%);
+      opacity: 0;
+      animation: wikinaut-warp-core ${CONFIG.jumpDurationMs}ms ease-in forwards;
+    }
+    .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-warp-core-in ${CONFIG.jumpDurationMs}ms ease-out forwards; }
+    @keyframes wikinaut-warp-core {
+      0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
+      60%  { opacity: 1; }
+      100% { opacity: 1; transform: translate(-50%,-50%) scale(1.5); }
+    }
+    @keyframes wikinaut-warp-core-in {
+      0%   { opacity: 1; transform: translate(-50%,-50%) scale(1.5); }
+      100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
+    }
+
+    /* Degraded jump: the link couldn't be found on the live page, so the ship blinks out from
+       its current position and the flight continues via a direct URL navigation. Reuses the
+       flash/ring shapes but amber, with no chromatic split — visually distinct from a real
+       jump so the player can tell a degraded hop from a normal one. */
+    .wikinaut-flash-emergency {
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 10%, ${PALETTE.amber} 34%, rgba(255,184,76,0.4) 54%, transparent 76%);
+    }
+    .wikinaut-flash-emergency::before,
+    .wikinaut-flash-emergency::after { display: none; }
+    .wikinaut-warp-ring-emergency {
+      border-color: rgba(255,209,140,0.9);
+      box-shadow: 0 0 22px 5px rgba(255,184,76,0.55), inset 0 0 14px rgba(255,255,255,0.6);
+    }
+
+    /* Camera shudder as the drive punches through (departure only). */
+    #wikinaut-root[data-warp-shake="true"] { animation: wikinaut-warp-shake 300ms ease-in-out; }
+    @keyframes wikinaut-warp-shake {
+      0%,100% { transform: translate(0,0); }
+      20% { transform: translate(2px,-2px); }
+      40% { transform: translate(-3px,2px); }
+      60% { transform: translate(3px,1px); }
+      80% { transform: translate(-2px,-1px); }
     }
 
     /* Ship stretches along its heading then snaps to a point as it jumps to lightspeed. */
@@ -846,6 +1106,16 @@
       100% { transform: scale(1);    opacity: 0; }
     }
 
+    /* Brief highlight pulse on a container Links.reveal just expanded, so uncovering a link
+       inside a collapsed navbox/details reads as an intentional action, not the page silently
+       shifting under the player. */
+    .wikinaut-reveal-pulse { animation: wikinaut-reveal-pulse 900ms ease-out; }
+    @keyframes wikinaut-reveal-pulse {
+      0%   { box-shadow: 0 0 0 0 rgba(0,243,255,0.6); }
+      40%  { box-shadow: 0 0 0 6px rgba(0,243,255,0.25); }
+      100% { box-shadow: 0 0 0 0 rgba(0,243,255,0); }
+    }
+
     /* ── Toast ─────────────────────────────────────────────────────────── */
 
     .wikinaut-toast {
@@ -888,11 +1158,17 @@
       #wikinaut-ship-shell .wikinaut-ship-body,
       #wikinaut-ship-shell .wikinaut-ship-core,
       #wikinaut-ship-shell .wikinaut-ship-thruster,
+      #wikinaut-ship-shell .wikinaut-ship-flame-flicker,
       #wikinaut-root[data-shake="true"] #wikinaut-panel,
       .wikinaut-gantry, .wikinaut-exhaust, .wikinaut-smoke-puff,
       .wikinaut-warp, .wikinaut-warp-streak, .wikinaut-flash,
+      .wikinaut-warp-tunnel, .wikinaut-warp-ring, .wikinaut-warp-core,
+      #wikinaut-root[data-warp-shake="true"],
       .wikinaut-reticle, .wikinaut-landing-burst,
       .wikinaut-ignition, .wikinaut-shockwave,
+      .wikinaut-reveal-pulse,
+      #wikinaut-panel[data-phase="plotting"],
+      #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button,
       #wikinaut-route-card {
         animation: none !important;
       }
@@ -905,21 +1181,23 @@
   const dom = {};
   const runtime = {
     phase: 'idle',
-    route: null,
-    selectedTitle: '',
+    route: null,        // the SELECTED route — every flight consumer reads only this
+    routes: null,       // all equally-short routes from the last chart (≤ CONFIG.maxRoutes)
+    routeIndex: 0,      // which of `routes` is selected
     selectedPage: null,
     figureAngle: 0,
     isWalking: false,
     figurePosition: {x: 0, y: 0},
-    justLaunched: false,
     autocompleteTimer: 0,
     autocompleteAbortId: 0,
     settingsOpen: false,
   };
 
   // ─── Phase machine (drives both nav-computer UI and ship) ─────────────────────
-  // Single source of truth for "where are we in the flight loop". CSS keys off
-  // `#wikinaut-panel[data-phase=…]` so visual states stay declarative.
+  // Single source of truth for "where are we in the flight loop". `data-phase` on the panel is
+  // the coarse truth CSS keys off directly (plotting/stalled accents); the finer per-beat FX
+  // (data-launch, data-jumping, data-flying) are set alongside phase transitions by the callers
+  // that own them (beginWalk, Traversal) — not by the FX modules themselves.
   const PHASES = {
     IDLE: 'idle',
     DESTINATION_SET: 'destination-set',
@@ -935,7 +1213,12 @@
   const Phase = {
     set(next) {
       runtime.phase = next;
-      if (dom.panel) dom.panel.dataset.phase = next;
+      if (dom.panel) {
+        dom.panel.dataset.phase = next;
+        // Single writer for data-flying: derived from phase rather than set/cleared by hand
+        // at each call site (that duplicated the phase machine's own signal).
+        dom.panel.dataset.flying = next === PHASES.FLYING ? 'true' : 'false';
+      }
     },
     is(...names) {
       return names.includes(runtime.phase);
@@ -986,28 +1269,51 @@
   const Settings = {
     _cache: null,
 
-    load() {
+    // Settings persist permanently via GM storage (like the Backend URL), so they survive
+    // across tabs and browser sessions. sessionStorage is only a fallback for environments
+    // without the GM APIs, plus a one-time migration source from the pre-GM era.
+    _read() {
       try {
+        if (typeof GM_getValue === 'function') {
+          const raw = GM_getValue(CONFIG.settingsStorageKey, '');
+          if (raw) return JSON.parse(raw);
+          const legacy = sessionStorage.getItem(CONFIG.settingsStorageKey);
+          if (legacy) {
+            GM_setValue(CONFIG.settingsStorageKey, legacy);
+            return JSON.parse(legacy);
+          }
+          return null;
+        }
         const raw = sessionStorage.getItem(CONFIG.settingsStorageKey);
-        Settings._cache = raw
-          ? {...SETTINGS_DEFAULTS, ...JSON.parse(raw)}
-          : {...SETTINGS_DEFAULTS};
+        return raw ? JSON.parse(raw) : null;
       } catch {
-        Settings._cache = {...SETTINGS_DEFAULTS};
+        return null;
       }
+    },
+
+    _persist() {
+      try {
+        const raw = JSON.stringify(Settings._cache);
+        if (typeof GM_setValue === 'function') GM_setValue(CONFIG.settingsStorageKey, raw);
+        else sessionStorage.setItem(CONFIG.settingsStorageKey, raw);
+      } catch {}
+    },
+
+    load() {
+      Settings._cache = {...SETTINGS_DEFAULTS, ...(Settings._read() || {})};
       return Settings._cache;
     },
 
     save(patch) {
       Settings._cache = {...(Settings._cache ?? SETTINGS_DEFAULTS), ...patch};
-      try {
-        sessionStorage.setItem(CONFIG.settingsStorageKey, JSON.stringify(Settings._cache));
-      } catch {}
+      Settings._persist();
     },
 
     reset() {
       Settings._cache = {...SETTINGS_DEFAULTS};
       try {
+        // No GM_deleteValue in the @grant list — an empty string reads as "unset" in _read.
+        if (typeof GM_setValue === 'function') GM_setValue(CONFIG.settingsStorageKey, '');
         sessionStorage.removeItem(CONFIG.settingsStorageKey);
       } catch {}
     },
@@ -1018,7 +1324,12 @@
 
     applyToDom() {
       if (!dom.root) return;
-      dom.root.style.setProperty('--wn-ship-color', Settings.get('travelerColor'));
+      // The ship shell and jump layer leave #wikinaut-root while a journey is active
+      // (JourneyPortal mounts them on document.body), so the color must be set on each
+      // host directly — a var set only on the root can't reach them there.
+      for (const el of [dom.root, dom.figure, dom.ripLayer]) {
+        el?.style.setProperty('--wn-ship-color', Settings.get('travelerColor'));
+      }
     },
   };
 
@@ -1054,12 +1365,15 @@
       canvas.style.height = `${window.innerHeight}px`;
     },
 
+    // Points and sparks live in DOCUMENT coordinates (callers pass viewport positions; scroll
+    // is added on write and subtracted at draw time). The wake is part of the article world:
+    // when the camera scrolls, it streams past with the page instead of sticking to the glass.
     addPoint(x, y) {
       const now = performance.now();
       if (now - Trail._lastPointTime < 16) return;
       Trail._lastPointTime = now;
-      const cx = x + CONFIG.figureSize / 2;
-      const cy = y + CONFIG.figureSize / 2;
+      const cx = x + CONFIG.figureSize / 2 + window.scrollX;
+      const cy = y + CONFIG.figureSize / 2 + window.scrollY;
       Trail.points.push({x: cx, y: cy, t: now});
       // Occasional ember flung off the engine wash, drifting and decaying on its own.
       if (Math.random() < 0.5) {
@@ -1077,14 +1391,17 @@
       if (!Trail._rafId) Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
     },
 
-    // Radial shower of embers from a point — used for ignition and touchdown.
+    // Radial shower of embers from a point (viewport coords in, doc coords stored) — used for
+    // ignition and touchdown.
     burst(x, y, count = 16) {
       const now = performance.now();
+      const docX = x + window.scrollX;
+      const docY = y + window.scrollY;
       for (let i = 0; i < count; i += 1) {
         const a = Math.random() * Math.PI * 2;
         const sp = 1.4 + Math.random() * 2.6;
         Trail.sparks.push({
-          x, y,
+          x: docX, y: docY,
           vx: Math.cos(a) * sp,
           vy: Math.sin(a) * sp * 0.8,
           t: now,
@@ -1120,6 +1437,10 @@
       const pts = Trail.points;
       const hasRibbon = pts.length > 1;
       if (hasRibbon || Trail.sparks.length) {
+        // Points/sparks are stored in doc coords; render at doc − scroll so the wake stays
+        // pinned to the article while the camera moves (the canvas itself stays fixed).
+        const sx = window.scrollX;
+        const sy = window.scrollY;
         // Additive blending fuses the overlapping segments into one continuous glow.
         ctx.globalCompositeOperation = 'lighter';
         ctx.lineCap = 'round';
@@ -1138,21 +1459,23 @@
               ctx.lineWidth = (1 + e * e * 8) * widthBoost;
               ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${(e * e * (pass === 0 ? 0.16 : 0.5)).toFixed(3)})`;
               ctx.beginPath();
-              ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
-              ctx.lineTo(b.x, b.y);
+              ctx.moveTo(pts[i - 1].x - sx, pts[i - 1].y - sy);
+              ctx.lineTo(b.x - sx, b.y - sy);
               ctx.stroke();
             }
           }
 
           // 2) Bright nozzle flare at the freshest point.
           const head = pts[pts.length - 1];
-          const flare = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, 18);
+          const hx = head.x - sx;
+          const hy = head.y - sy;
+          const flare = ctx.createRadialGradient(hx, hy, 0, hx, hy, 18);
           flare.addColorStop(0, 'rgba(255,255,255,0.95)');
           flare.addColorStop(0.35, `rgba(${core.r},${core.g},${core.b},0.7)`);
           flare.addColorStop(1, `rgba(${mid.r},${mid.g},${mid.b},0)`);
           ctx.fillStyle = flare;
           ctx.beginPath();
-          ctx.arc(head.x, head.y, 18, 0, Math.PI * 2);
+          ctx.arc(hx, hy, 18, 0, Math.PI * 2);
           ctx.fill();
         }
 
@@ -1160,8 +1483,8 @@
         for (const s of Trail.sparks) {
           const sAge = (now - s.t) / s.life;
           const e = 1 - sAge;
-          const px = s.x + s.vx * (now - s.t) * 0.06;
-          const py = s.y + s.vy * (now - s.t) * 0.06;
+          const px = s.x + s.vx * (now - s.t) * 0.06 - sx;
+          const py = s.y + s.vy * (now - s.t) * 0.06 - sy;
           ctx.fillStyle = `rgba(${core.r},${core.g},${core.b},${(e * 0.9).toFixed(3)})`;
           ctx.beginPath();
           ctx.arc(px, py, 0.6 + e * 1.4, 0, Math.PI * 2);
@@ -1248,6 +1571,13 @@
         <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings" aria-expanded="false">⚙</button>
         <div id="wikinaut-route-card" aria-live="polite">
           <div id="wikinaut-status">Set a destination and chart a course through Wikipedia.</div>
+          <div id="wikinaut-route-pager" hidden>
+            <button id="wikinaut-route-prev" class="wikinaut-button secondary icon" type="button"
+              title="Previous route" aria-label="Previous route">◀</button>
+            <span id="wikinaut-route-label" aria-live="polite"></span>
+            <button id="wikinaut-route-next" class="wikinaut-button secondary icon" type="button"
+              title="Next route" aria-label="Next route">▶</button>
+          </div>
           <div id="wikinaut-starmap"></div>
           <div id="wikinaut-freshness"></div>
           <div id="wikinaut-countdown" data-on="false" aria-live="assertive"></div>
@@ -1289,6 +1619,10 @@
       settingsButton: root.querySelector('#wikinaut-settings-button'),
       settingsSection: root.querySelector('#wikinaut-settings-section'),
       status: root.querySelector('#wikinaut-status'),
+      routePager: root.querySelector('#wikinaut-route-pager'),
+      routePrev: root.querySelector('#wikinaut-route-prev'),
+      routeNext: root.querySelector('#wikinaut-route-next'),
+      routeLabel: root.querySelector('#wikinaut-route-label'),
       routeStrip: root.querySelector('#wikinaut-starmap'),
       freshness: root.querySelector('#wikinaut-freshness'),
       launchpad: root.querySelector('#wikinaut-launchpad'),
@@ -1320,6 +1654,8 @@
 
     dom.chartButton.addEventListener('click', chartCourse);
     dom.beginButton.addEventListener('click', beginWalk);
+    dom.routePrev.addEventListener('click', () => cycleRoute(-1));
+    dom.routeNext.addEventListener('click', () => cycleRoute(1));
 
     document.addEventListener('click', (event) => {
       if (!dom.suggestions.contains(event.target) && event.target !== dom.input) {
@@ -1388,8 +1724,9 @@
     if (message) setStatus(message);
   }
 
-  function setStatus(message) {
+  function setStatus(message, {isError = false} = {}) {
     dom.status.textContent = message;
+    dom.status.dataset.error = isError ? 'true' : 'false';
   }
 
   function setFreshness(date) {
@@ -1415,11 +1752,13 @@
   // ─── Autocomplete ───────────────────────────────────────────────────────────
 
   function onDestinationInput() {
-    runtime.selectedTitle = dom.input.value.trim();
     // Editing abandons any locked destination and charted course (strict gating).
     runtime.selectedPage = null;
     runtime.route = null;
+    runtime.routes = null;
+    runtime.routeIndex = 0;
     dom.beginButton.disabled = true;
+    updateRouteCycle();
     updateChartGate();
     clearTimeout(runtime.autocompleteTimer);
 
@@ -1490,10 +1829,12 @@
       button.addEventListener('mousedown', (event) => {
         event.preventDefault();          // commit before the input blurs; no focus/blur race
         dom.input.value = title;
-        runtime.selectedTitle = title;
         runtime.selectedPage = title;    // a real OpenSearch pick — unlocks Chart Course
         // A fresh destination invalidates any previously charted route.
         runtime.route = null;
+        runtime.routes = null;
+        runtime.routeIndex = 0;
+        updateRouteCycle();
         dom.beginButton.disabled = true;
         if (Phase.is(PHASES.COURSE_READY)) Phase.set(PHASES.DESTINATION_SET);
         closeSuggestions();
@@ -1537,35 +1878,91 @@
     dom.beginButton.disabled = true;
 
     try {
-      const route = await Routing.fetchRoute(sourceTitle, targetTitle);
+      const routes = await Routing.fetchRoutes(sourceTitle, targetTitle);
+      const route = routes[0];
+      runtime.routes = routes;
+      runtime.routeIndex = 0;
       runtime.route = route;
       Storage.save({
         active: false,
         currentIndex: 0,
         route,
+        routes,
+        routeIndex: 0,
         targetTitle: route[route.length - 1],
       });
-      renderRoute(route, 0);
+      renderRoute(route, 0, 1, alternateRoutes(), runtime.routeIndex);
+      updateRouteCycle();
       const hops = route.length - 1;
-      setStatus(`Course locked — ${hops} ${hops === 1 ? 'jump' : 'jumps'}. Ready to launch.`);
+      const routeNote =
+        routes.length > 1 ? ` ${routes.length} equally short routes charted.` : '';
+      setStatus(
+        `Course locked — ${hops} ${hops === 1 ? 'jump' : 'jumps'}.${routeNote} Ready to launch.`);
       dom.beginButton.disabled = route.length < 2;
       Phase.set(route.length < 2 ? PHASES.IDLE : PHASES.COURSE_READY);
     } catch (error) {
       runtime.route = null;
+      runtime.routes = null;
+      runtime.routeIndex = 0;
       Storage.clear();
       dom.beginButton.disabled = true;
       renderRoute([]);
-      setStatus(error.message || 'No course found. Try a different destination.');
+      updateRouteCycle();
+      console.error('[Wikinaut]', error.code || 'wn/route-none', error);
+      setStatus(error.message || 'No course found. Try a different destination.', {isError: true});
       Phase.set(PHASES.IDLE);
     } finally {
       setBusy(false);
     }
   }
 
+  // The non-selected charted routes, for the star map's dim underlay fan.
+  // The non-selected routes, each tagged with its STABLE lane (= index in runtime.routes) so
+  // the star chart draws every route on the same lane no matter which one is selected.
+  function alternateRoutes() {
+    if (!runtime.routes || runtime.routes.length < 2) return [];
+    return runtime.routes
+      .map((route, laneIdx) => ({route, lane: laneIdx}))
+      .filter((r) => r.lane !== runtime.routeIndex);
+  }
+
+  // Route pager: visible only when the last chart produced several equally-short routes
+  // (CSS additionally gates it to the course-ready phase). Label reads "Route k/N".
+  function updateRouteCycle() {
+    if (!dom.routePager) return;
+    const n = runtime.routes?.length || 0;
+    dom.routePager.hidden = n < 2;
+    if (n >= 2) dom.routeLabel.textContent = `Route ${runtime.routeIndex + 1}/${n}`;
+  }
+
+  // Step to the previous/next equally-short route (wraps around): swaps the selection,
+  // re-plots the star map, and re-saves the (not yet launched) course. Everything else —
+  // status, Launch, destination — is deliberately left untouched.
+  function cycleRoute(delta = 1) {
+    if (!runtime.routes || runtime.routes.length < 2) return;
+    if (!Phase.is(PHASES.COURSE_READY)) return;
+    const n = runtime.routes.length;
+    runtime.routeIndex = (runtime.routeIndex + delta + n) % n;
+    runtime.route = runtime.routes[runtime.routeIndex];
+    Storage.save({
+      active: false,
+      currentIndex: 0,
+      route: runtime.route,
+      routes: runtime.routes,
+      routeIndex: runtime.routeIndex,
+      targetTitle: runtime.route[runtime.route.length - 1],
+    });
+    renderRoute(runtime.route, 0, 1, alternateRoutes(), runtime.routeIndex);
+    updateRouteCycle();
+  }
+
   // Render the route as a plotted star-chart: waypoints laid out across a 2D chart,
   // joined by a dotted track with a glowing line that "draws on" so charting reads as a
   // course being plotted (not a static reveal). Expands the panel in place.
-  function renderRoute(route, currentIndex = -1, nextIndex = currentIndex + 1) {
+  // `alternates` (optional) are the other equally-short routes: drawn UNDER the selected
+  // path as dimmer, thinner, hue-shifted polylines sharing the selected route's endpoints,
+  // with their intermediate waypoints fanned vertically so the paths visibly diverge.
+  function renderRoute(route, currentIndex = -1, nextIndex = currentIndex + 1, alternates = [], lane = 0) {
     const host = dom.routeStrip;
     host.replaceChildren();
     if (!route || !route.length) {
@@ -1583,14 +1980,47 @@
     const amp = (H - padV * 2) / 2;
     const midY = H / 2;
 
+    // Every route keeps a STABLE lane — its index in runtime.routes — so cycling the pager
+    // visibly moves the bright selected path onto a different lane while the previously
+    // selected lane dims underneath. Endpoints (shared source/target) are pinned to the
+    // base-lane positions for all routes; lane 0 is the classic center lane.
+    const laneY = (i, m, j) =>
+      i === 0 || i === m - 1 || !j
+        ? midY + Math.sin(i * 0.9 + 0.6) * amp
+        : midY + Math.sin(i * 0.9 + 0.6 + j * 2.1) * amp * 0.9;
+
     const pts = route.map((title, i) => ({
       i,
       title,
       x: n === 1 ? W / 2 : padX + innerW * (i / (n - 1)),
-      y: midY + Math.sin(i * 0.9 + 0.6) * amp,
+      y: laneY(i, n, lane),
     }));
 
     const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+
+    // Alternate-route underlay: same x spacing per hop; each alternate rides its own stable
+    // lane (`{route, lane}` pairs) with a lane-keyed color, so identity survives cycling.
+    const altColors = ['rgba(30,144,255,0.55)', 'rgba(189,147,249,0.55)', 'rgba(0,243,255,0.4)',
+      'rgba(127,196,255,0.5)', 'rgba(199,21,219,0.45)'];
+    let altMarkup = '';
+    alternates.forEach((alt) => {
+      const altRoute = alt.route;
+      const m = altRoute.length;
+      if (m < 2) return;
+      const altPts = altRoute.map((title, i) => {
+        const x = padX + innerW * (i / (m - 1));
+        return {x, y: laneY(i, m, alt.lane), title};
+      });
+      const color = altColors[alt.lane % altColors.length];
+      const altD = altPts
+        .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+      const nodes = altPts.slice(1, -1)
+        .map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2" ` +
+          `fill="${color}"><title>${escapeXml(p.title)}</title></circle>`)
+        .join('');
+      altMarkup += `<g class="wikinaut-route-alt" style="stroke:${color}">` +
+        `<path d="${altD}"></path>${nodes}</g>`;
+    });
     const frac = (v) => v - Math.floor(v);
     let stars = '';
     for (let i = 0; i < 28; i += 1) {
@@ -1624,7 +2054,7 @@
       `<circle class="wikinaut-chart-ring" cx="${W / 2}" cy="${midY}" r="${midY - 28}"></circle>` +
       `<line x1="0" y1="${midY}" x2="${W}" y2="${midY}"></line>` +
       `<line x1="${W / 2}" y1="0" x2="${W / 2}" y2="${H}"></line>` +
-      `</g>${stars}` +
+      `</g>${stars}${altMarkup}` +
       `<path id="wikinaut-route-track" d="${d}"></path>` +
       `<path id="wikinaut-route-path" d="${d}"></path>${waypoints}</svg>`;
 
@@ -1670,16 +2100,27 @@
 
     // The launch sequence (countdown + gantry + lift-off) plays only here, on the origin
     // page. resume() then continues the flight; the first hop skips the dock-exit because
-    // the ship is already airborne off the panel top.
-    await LaunchSequence.play();
-    runtime.justLaunched = true;
+    // the ship is already airborne off the panel top. LaunchSequence is pure FX — this
+    // function (the engine side) owns the phase transitions and status narration.
+    const reduce = prefersReducedMotion();
+    Phase.set(PHASES.COUNTDOWN);
+    await LaunchSequence.arm(reduce);
+    await LaunchSequence.countdown(reduce, (n) => setStatus(`Launch in ${n}…`));
+    await LaunchSequence.spoolUp(reduce);
+    Phase.set(PHASES.LAUNCHING);
+    setStatus('Launch!');
+    await LaunchSequence.liftoff(reduce);
+
     await Traversal.resume();
   }
 
   // ─── Routing ─────────────────────────────────────────────────────────────────
 
   const Routing = {
-    async fetchRoute(sourceTitle, targetTitle) {
+    // The backend returns ALL equally-short paths for a query (that's what powers the
+    // route-selection feature — no extra backend work). Map every one to a title route,
+    // de-dupe, and cap at CONFIG.maxRoutes for star-map legibility.
+    async fetchRoutes(sourceTitle, targetTitle) {
       let data;
       try {
         data = await requestJson(`${Backend.url}/paths`, {
@@ -1688,37 +2129,72 @@
           body: JSON.stringify({source: sourceTitle, target: targetTitle}),
         });
       } catch (err) {
-        if (err.message.includes('Request failed')) {
-          throw new Error(
-            `Couldn't reach the navigation backend (${err.message}). ` +
-              `Check your connection, or set a Backend URL in settings.`,
-          );
-        }
-        throw err;
+        throw Routing.wrapBackendError(err);
       }
 
       if (!data.paths || !data.paths.length) {
-        throw new Error(
-          `No course found between "${sourceTitle}" and "${targetTitle}". ` +
-            `One of these articles may not be in the graph yet, ` +
-            `or there's simply no Wikipedia link path between them.`,
-        );
+        throw Object.assign(
+          new Error(
+            `No course found between "${sourceTitle}" and "${targetTitle}". ` +
+              `One of these articles may not be in the graph yet, ` +
+              `or there's simply no Wikipedia link path between them.`),
+          {code: 'wn/route-none'});
       }
 
-      const firstPath = data.paths[0];
-      const route = firstPath.map((pageId) => {
-        const page = data.pages?.[String(pageId)];
-        if (!page?.title) {
-          throw new Error('The course response was missing a page title. Please try again.');
-        }
-        return page.title;
-      });
-
-      if (route.length < 2) {
-        throw new Error('That course is too short to fly — try a more distant destination.');
+      const seen = new Set();
+      const routes = [];
+      for (const path of data.paths) {
+        const route = path.map((pageId) => {
+          const page = data.pages?.[String(pageId)];
+          if (!page?.title) {
+            throw Object.assign(
+              new Error('The course response was missing a page title. Please try again.'),
+              {code: 'wn/backend-bad-response'});
+          }
+          return page.title;
+        });
+        if (route.length < 2) continue;
+        const key = route.join('\u0001');   // titles contain spaces; join on a non-title char
+        if (seen.has(key)) continue;
+        seen.add(key);
+        routes.push(route);
+        if (routes.length >= CONFIG.maxRoutes) break;
       }
 
-      return route;
+      if (!routes.length) {
+        throw Object.assign(
+          new Error('That course is too short to fly — try a more distant destination.'),
+          {code: 'wn/route-none'});
+      }
+
+      return routes;
+    },
+
+    // Backend-supplied messages (page-not-found, bad-request, MediaWiki-style errors — anything
+    // requestJson already tagged with a `code`) are already player-facing; pass them through
+    // unchanged. Only the raw transport-layer failures (unreachable/timeout/malformed body) need
+    // a friendlier wrapper here.
+    wrapBackendError(err) {
+      if (err.code && err.code.startsWith('backend/')) return err;
+
+      let code = err.code;
+      let friendly;
+      if (err.message === 'Request timed out.') {
+        code = code || 'wn/backend-timeout';
+        friendly =
+          'The navigation backend took too long to respond. It may be waking up from idle — try again in a moment.';
+      } else if (err.message === 'Network request failed.') {
+        code = code || 'wn/backend-unreachable';
+        friendly = "Couldn't reach the navigation backend. Check your connection, or set a Backend URL in settings.";
+      } else if (code === 'wn/backend-bad-response') {
+        friendly = err.message;
+      } else {
+        code = code || 'wn/backend-unreachable';
+        friendly =
+          `Couldn't reach the navigation backend (${err.message}). ` +
+            `Check your connection, or set a Backend URL in settings.`;
+      }
+      return Object.assign(new Error(friendly), {code});
     },
 
     async fetchGraphMeta() {
@@ -1727,6 +2203,29 @@
       if (!ts) return null;
       const date = new Date(ts);
       return isNaN(date.getTime()) ? null : date;
+    },
+
+    // Titles that redirect TO `title` — so Links.matchesTitle can also recognize a live page
+    // linking via a redirect alias (e.g. route step "New York City" but the on-page anchor is
+    // literally "NYC"). Best-effort: any failure just means Links falls back to exact-title
+    // matching (and ultimately the URL-jump fallback) — this never blocks the flight.
+    async fetchRedirectAliases(title) {
+      try {
+        const params = new URLSearchParams({
+          action: 'query',
+          list: 'backlinks',
+          bltitle: title,
+          blfilterredir: 'redirects',
+          bllimit: 'max',   // popular targets can have hundreds of redirect aliases
+          format: 'json',
+        });
+        const data = await requestJson(`${CONFIG.wikipediaApiUrl}?${params.toString()}`);
+        const pages = data?.query?.backlinks;
+        return Array.isArray(pages) ? pages.map((p) => p.title).filter(Boolean) : [];
+      } catch (err) {
+        console.warn('[Wikinaut] wn/redirect-lookup-failed', title, err);
+        return [];
+      }
     },
 
     async autocomplete(query) {
@@ -1762,6 +2261,7 @@
 
     canonical(title) {
       return safeDecode(String(title || ''))
+        .normalize('NFC')   // fold composed/decomposed accents so "Café" always equals "Café"
         .replace(/^https?:\/\/en\.wikipedia\.org\/wiki\//i, '')
         .replace(/^\/wiki\//i, '')
         .replace(/_/g, ' ')
@@ -1778,11 +2278,27 @@
       return route.findIndex((routeTitle) => Titles.same(routeTitle, title));
     },
 
+    // Raw (URL-form: underscores, still percent-encoded) article title from an href, or ''
+    // when it isn't a same-wiki article link. Resolves EVERY href form the two renderers
+    // emit — relative /wiki/Foo (legacy parser), ./Foo (Parsoid DOM), protocol-relative
+    // //en.wikipedia.org/wiki/Foo (Parsoid read views), and fully-qualified — and rejects
+    // other hosts (Commons/Wiktionary links also contain "/wiki/").
+    rawFromHref(href) {
+      if (!href) return '';
+      let url;
+      try {
+        url = new URL(href, location.href);
+      } catch {
+        return '';
+      }
+      if (url.hostname !== location.hostname) return '';
+      if (!url.pathname.startsWith('/wiki/')) return '';
+      return url.pathname.slice('/wiki/'.length);
+    },
+
     fromLink(link) {
-      const href = link.getAttribute('href') || '';
-      if (!href.startsWith('/wiki/')) return '';
-      const title = href.split('#')[0].split('?')[0].replace(/^\/wiki\//, '');
-      return safeDecode(title).replace(/_/g, ' ');
+      const raw = Titles.rawFromHref(link.getAttribute('href') || '');
+      return raw ? safeDecode(raw).replace(/_/g, ' ') : '';
     },
   };
 
@@ -1793,17 +2309,31 @@
       try {
         const raw = sessionStorage.getItem(CONFIG.routeStorageKey);
         return raw ? JSON.parse(raw) : null;
-      } catch {
+      } catch (error) {
+        console.warn('[Wikinaut] wn/route-state-corrupt', error);
         return null;
       }
     },
 
+    // Never throws: quota-exceeded / private-mode storage denial degrades to "the flight still
+    // navigates, it just won't auto-resume across the page reload" rather than surfacing as a
+    // generic turbulence error.
     save(state) {
-      sessionStorage.setItem(CONFIG.routeStorageKey, JSON.stringify(state));
+      try {
+        sessionStorage.setItem(CONFIG.routeStorageKey, JSON.stringify(state));
+        return true;
+      } catch (error) {
+        console.warn('[Wikinaut] wn/storage-write-failed', error);
+        return false;
+      }
     },
 
     clear() {
-      sessionStorage.removeItem(CONFIG.routeStorageKey);
+      try {
+        sessionStorage.removeItem(CONFIG.routeStorageKey);
+      } catch (error) {
+        console.warn('[Wikinaut] wn/storage-write-failed', error);
+      }
     },
   };
 
@@ -1880,8 +2410,23 @@
               <stop offset="0" stop-color="#2a3e58"></stop>
               <stop offset="1" stop-color="#0a1422"></stop>
             </linearGradient>
+            <radialGradient id="wikinaut-flame-glow" cx="0.72" cy="0.5" r="0.85">
+              <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"></stop>
+              <stop class="wikinaut-flame-glow-tint" offset="0.4" stop-color="${PALETTE.cyan}" stop-opacity="0.5"></stop>
+              <stop class="wikinaut-flame-glow-tint" offset="1" stop-color="${PALETTE.cyan}" stop-opacity="0"></stop>
+            </radialGradient>
           </defs>
           <g class="wikinaut-ship-body">
+            <!-- Engine flame at the bell (tail), drawn behind the hull. Because it lives
+                 inside the rotated shell it always trails straight off the ship's tail. -->
+            <g class="wikinaut-ship-flame">
+              <g class="wikinaut-ship-flame-flicker">
+                <ellipse class="wikinaut-ship-flame-glow" cx="-2" cy="36" rx="22" ry="9"></ellipse>
+                <path class="wikinaut-ship-flame-plume" d="M12 31 Q -8 33 -26 36 Q -8 39 12 41 Z"></path>
+                <path class="wikinaut-ship-flame-mid" d="M12 32.5 Q 0 34.5 -13 36 Q 0 37.5 12 39.5 Z"></path>
+                <path class="wikinaut-ship-flame-core" d="M12 33.5 Q 5 35 -4 36 Q 5 37 12 38.5 Z"></path>
+              </g>
+            </g>
             <polygon class="wikinaut-ship-thruster" points="11,33 11,39 -4,36"></polygon>
             <polygon class="wikinaut-ship-wing" points="48,31 24,31 14,14"></polygon>
             <polygon class="wikinaut-ship-wing" points="48,41 24,41 14,58"></polygon>
@@ -1953,14 +2498,15 @@
   // Plays ONCE, on the origin page inside beginWalk, before the first navigation. The
   // per-hop resume() after each link.click() enters directly at FLYING, so the countdown
   // never replays — only-once falls out of where this lives, not a stored flag.
+  //
+  // Pure FX layer: no Phase.set/setStatus calls here (those are the caller's job — see
+  // beginWalk) so this module stays reusable/testable independent of the phase machine.
   const LaunchSequence = {
-    async play() {
-      const reduce = prefersReducedMotion();
-
-      // Render the ship above everything in the panel's launch bay (top-center), nose up.
-      // The ship is otherwise hidden — it only exists from launch until arrival.
+    // Render the ship above everything in the panel's launch bay (top-center), nose up, and
+    // rise the gantry rails / part the bay doors. The ship is otherwise hidden — it only
+    // exists from launch until arrival.
+    async arm(reduce) {
       JourneyPortal.activate();
-      Phase.set(PHASES.COUNTDOWN);
       Trail.clear();
 
       const pad = LaunchSequence.padPosition();
@@ -1969,32 +2515,37 @@
       Figure.moveTo(pad.x, pad.y);
       Figure.pose('idle');
 
-      // Gantry rails rise + bay doors part.
       dom.panel.dataset.launch = 'arming';
       await sleep(reduce ? 0 : 500);
+    },
 
-      // 3 … 2 … 1 …
+    // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it.
+    async countdown(reduce, onTick) {
       for (const n of [3, 2, 1]) {
-        setStatus(`Launch in ${n}…`);
+        if (onTick) onTick(n);
         LaunchSequence.showDigit(String(n), reduce);
         await sleep(reduce ? 140 : 760);
       }
       LaunchSequence.hideDigit();
+    },
 
-      // Spool-up: the drive charges (core pulses) and the craft hunkers against the
-      // hold-downs — a short crouch storing energy before the bolts blow.
+    // Spool-up: the drive charges (core pulses) and the craft hunkers against the hold-downs —
+    // a short crouch storing energy before the bolts blow.
+    async spoolUp(reduce) {
+      const pad = LaunchSequence.padPosition();
       Figure.pose('grab');
       if (!reduce) {
         await animate(300, (p) => {
           Figure.moveTo(pad.x, pad.y + Math.sin(p * Math.PI) * 6);
         });
       }
+    },
 
-      // Ignition.
-      Phase.set(PHASES.LAUNCHING);
-      setStatus('Launch!');
+    // Ignition + climb clear of the pad.
+    async liftoff(reduce) {
       dom.panel.dataset.launch = 'launch';
       Figure.pose('push');
+      dom.figure.dataset.thrust = 'launch';   // full white+orange torch off the pad
 
       const start = {...runtime.figurePosition};
       // Engine bell sits at the tail; the craft is nose-up, so the bell is below centre.
@@ -2023,8 +2574,10 @@
         });
       }
 
-      // Retract the launch rig; the ship is airborne and the flight loop takes over.
+      // Retract the launch rig; the ship is airborne and the flight loop takes over. Drop the
+      // launch torch back to the cyan cruise flame.
       delete dom.panel.dataset.launch;
+      delete dom.figure.dataset.thrust;
       Figure.pose('look');
     },
 
@@ -2080,12 +2633,17 @@
       if (runtime.isWalking) return;
 
       const state = Storage.load();
-      if (!state?.active || !Array.isArray(state.route)) return;
+      if (!state) return;         // nothing saved — the common case on a normal page load
+      if (!state.active) return;  // a course is saved but not launched yet — also normal
+      if (!Array.isArray(state.route)) {
+        console.warn('[Wikinaut] wn/route-state-corrupt: active flight with non-array route', state);
+        Storage.clear();
+        return;
+      }
 
       runtime.isWalking = true;
       Phase.set(PHASES.FLYING);
       JourneyPortal.activate();
-      if (dom.panel) dom.panel.dataset.flying = 'true';
       try {
         const currentTitle = Titles.currentPageTitle();
         let currentIndex = Number.isInteger(state.currentIndex) ? state.currentIndex : 0;
@@ -2093,9 +2651,7 @@
         if (!Titles.same(state.route[currentIndex], currentTitle)) {
           const actualIndex = Titles.indexInRoute(state.route, currentTitle);
           if (actualIndex === -1) {
-            setStatus('The ship drifted off the plotted course. Chart a fresh course from here.');
-            Storage.clear();
-            renderRoute([]);
+            Traversal.offerRecompute(state, currentTitle);
             return;
           }
           currentIndex = actualIndex;
@@ -2123,35 +2679,89 @@
 
         const nextTitle = state.route[currentIndex + 1];
         setStatus(`Scanning for ${nextTitle}…`);
-        const link = Links.locate(nextTitle);
+        // Titles that redirect to nextTitle — so a live page linking via a redirect alias
+        // (route step "New York City" but the on-page anchor is literally "NYC") still
+        // matches. Best-effort; an empty list just falls back to exact-title matching.
+        const aliases = await Routing.fetchRedirectAliases(nextTitle);
+        let link = Links.locate(nextTitle, aliases);
 
         if (!link) {
-          // The DOM scan couldn't surface the link (collapsed/lazy section, a redirect
-          // alias the title text can't match, or the live page genuinely diverged from
-          // the graph). The graph says this jump exists, so don't dead-end — navigate
-          // straight to the canonical article and let the next page resume the flight.
+          // The link may be tucked inside a collapsed navbox / dropdown / <details>. Open
+          // any container hiding it and try again before falling back to a URL jump.
+          const revealed = Links.reveal(nextTitle, aliases);
+          if (revealed) {
+            setStatus(`Uncovering the route to ${nextTitle}…`);
+            link = Links.locate(nextTitle, aliases) || revealed;
+          }
+        }
+
+        if (!link) {
+          // The DOM scan still couldn't surface the link (a redirect alias the title text
+          // can't match, or the live page genuinely diverged from the graph). The graph says
+          // this jump exists, so don't dead-end — navigate straight to the canonical article
+          // and let the next page resume the flight.
           // (CLAUDE.md: always provide a fallback to direct-by-URL navigation.)
-          setStatus(`Link to "${nextTitle}" isn't visible here — jumping by coordinates…`);
+          // The warn carries enough context to diagnose a field report: candidateCount 0 means
+          // no anchor matched the title at all (a matching gap), >0 means match-but-unusable.
+          console.warn('[Wikinaut] wn/link-missing', {
+            title: nextTitle,
+            candidateCount: Links.candidates(nextTitle, aliases).length,
+            aliasCount: aliases.length,
+            revealTried: true,
+          });
+          setStatus(
+            `Couldn't find the link to "${nextTitle}" on this page — jumping by coordinates…`,
+            {isError: true});
           await Traversal.jumpByUrl(nextTitle, currentIndex + 1, state.route);
           return;
         }
 
+        // Belt-and-braces: navboxes are made collapsible (and collapsed) by MediaWiki some
+        // seconds AFTER load, so the located link can be re-hidden at any moment. Reopen
+        // before planning the flight so the cruise aims at painted content, not a phantom
+        // rect; walkToLink repeats the guard at touchdown for collapses mid-cruise.
+        Links.ensureVisible(link);
+
         // Every hop flies straight to the link. On the launch page the ship is already
         // airborne off the pad; on later pages it has just dropped out of warp at the
         // entry position (Transition arrival) — either way, no dock to leave.
-        runtime.justLaunched = false;
         await Traversal.cruiseToLink(link);
         setStatus(`Target acquired: ${nextTitle}. Charging jump drive.`);
         await Traversal.walkToLink(link);
-        await Transition.tearThrough({
-          link,
-          nextTitle,
+
+        // tearThrough is pure FX; the engine (here) owns navigation + persistence. Wrap it in
+        // a watchdog so a throttled background tab or a rejected animation promise can never
+        // stall the actual jump — the transition just gets skipped straight to its end state.
+        let anchor;
+        try {
+          const watchdogMs = CONFIG.jumpDurationMs + 1000;
+          anchor = await Promise.race([
+            Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
+            sleep(watchdogMs).then(() => null),
+          ]);
+        } catch (transitionError) {
+          console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
+          anchor = null;
+        }
+        if (!anchor) {
+          anchor = Transition.anchorFromLink(link, link.getBoundingClientRect());
+        }
+
+        Storage.save({
+          active: true,
+          currentIndex: currentIndex + 1,
           route: state.route,
-          nextIndex: currentIndex + 1,
+          targetTitle: state.route[state.route.length - 1],
+          entry: {
+            x: anchor.slitX - CONFIG.figureSize / 2,
+            y: anchor.slitY - CONFIG.figureSize / 2,
+            angle: runtime.figureAngle,
+          },
         });
+        link.click();
       } catch (error) {
-        console.error('[Wikinaut]', error);
-        setStatus(error.message || 'The ship hit unexpected turbulence. Try again.');
+        console.error('[Wikinaut]', error.code || 'wn/unknown', error);
+        setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
         Storage.save({
           active: false,
@@ -2165,129 +2775,134 @@
       } finally {
         LinkFx.clearReticle();
         JourneyPortal.deactivate();
-        if (dom.panel) {
-          delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
-          delete dom.panel.dataset.flying;
-        }
+        if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
         runtime.isWalking = false;
       }
     },
 
-    // Two phases, so the ship and page never slide on mismatched curves (the old jank):
-    //   1. SCROLL-TO-CENTER — if the link isn't already near the comfort line, scroll it
-    //      there while the ship flies straight along the scroll axis (down for a downward
-    //      scroll, up for an upward one), locked to the *same* eased clock. The link
-    //      rises/falls to meet the descending/climbing ship — they converge in the middle.
-    //   2. ARC — with the page now stationary and the link parked at the comfort line,
-    //      sweep a banked bézier from wherever the ship ended up onto the link.
+    // The live page redirected/diverged off the plotted route (either a genuine drift, or the
+    // clicked link resolved through a Wikipedia redirect to a title not on our route). Rather
+    // than dead-ending, clear the stale route and set the console up so the player can chart a
+    // fresh course from here with one click — the destination is prefilled.
+    offerRecompute(state, currentTitle) {
+      const destination = state.targetTitle || state.route[state.route.length - 1] || '';
+      Storage.clear();
+      renderRoute([]);
+      console.warn('[Wikinaut] wn/off-course', {expected: state.route, arrived: currentTitle});
+      setStatus(
+        `The ship drifted off the plotted course (arrived at "${currentTitle}"). ` +
+          (destination ? `Chart a fresh course to ${destination}?` : 'Chart a fresh course from here.'),
+        {isError: true},
+      );
+      Phase.set(PHASES.STALLED);
+      if (destination) {
+        dom.input.value = destination;
+        runtime.selectedPage = destination;
+        updateChartGate();
+      }
+    },
+
+    // Document-space flight: the article is the world, the scroll is the camera. One cubic
+    // bézier per hop, planned in document coordinates from the ship's current position to the
+    // link's center; the ship faces the curve's true tangent every frame while the camera
+    // scrolls to keep it riding the comfort line — the page streams underneath the ship.
     async cruiseToLink(link) {
       const speed = Settings.get('walkingPixelsPerSecond');
-      const start = {...runtime.figurePosition};
       Figure.show();
       Figure.pose('walking');
 
-      // Where the link should settle: upper-middle of the viewport (~40% down), kept
+      const half = CONFIG.figureSize / 2;
+      // Comfort line: where the ship rides in the viewport — upper-middle (~40% down), kept
       // below the masthead and clear of the console band.
-      const restViewportY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
-
-      const rect = link.getBoundingClientRect();
-      const linkVpCenterY = rect.top + rect.height / 2;
-      const linkDocCenterY = linkVpCenterY + window.scrollY;
-
-      // "In the middle" = the link center is already within ±15% of the viewport height of
-      // the rest line. If so, skip the scroll and just fly to it.
-      const centeredEnough = Math.abs(linkVpCenterY - restViewportY) <= window.innerHeight * 0.15;
-
+      const restLineY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
       const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-      const desiredScrollY = centeredEnough
-        ? window.scrollY
-        : clamp(linkDocCenterY - restViewportY, 0, maxScroll);
-      const scrollDelta = desiredScrollY - window.scrollY;
+
+      // The ship's fixed-position transform is viewport-space; the flight is planned and flown
+      // in document space and converted per frame (viewport = doc − scroll).
+      const start = {
+        x: runtime.figurePosition.x + window.scrollX,
+        y: runtime.figurePosition.y + window.scrollY,
+      };
+      const rect = link.getBoundingClientRect();
+      const end = {
+        x: rect.left + rect.width / 2 + window.scrollX - half,
+        y: rect.top + rect.height / 2 + window.scrollY - half,
+      };
 
       if (prefersReducedMotion()) {
-        if (scrollDelta) window.scrollTo(0, desiredScrollY);
+        window.scrollTo(0, clamp(end.y + half - restLineY, 0, maxScroll));
         const t = Figure.targetAtLink(link);
-        Figure.headToward(start.x, start.y, t.x, t.y);
+        Figure.headToward(start.x, start.y, end.x, end.y);
         Figure.moveTo(t.x, t.y);
         Figure.pose('look');
         return;
       }
 
-      // ── Phase 1: scroll the link to the rest line; the ship flies along the scroll axis
-      //    (same direction, same eased clock) so the two move as one and converge. ──
-      let shipY = start.y;
-      if (scrollDelta) {
-        const startScroll = window.scrollY;
-        // Ship tracks the scroll 1:1 in the same direction, capped so it never leaves the
-        // screen or sinks into the console.
-        const downBudget = Math.max(0, (panelObstacleRect().top - 40) - start.y);
-        const upBudget = Math.max(0, start.y - 70);
-        const shipTravel = scrollDelta > 0
-          ? Math.min(scrollDelta, downBudget)
-          : -Math.min(-scrollDelta, upBudget);
-        const shipEndY = start.y + shipTravel;
+      const {p0, p1, p2, p3} = buildFlightPath(start, end, runtime.figureAngle);
+      const lut = buildArcLengthLut(p0, p1, p2, p3);
+      const duration = clamp(
+        (lut.total / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxCruiseDurationMs);
+      // Wall-clock-derived velocity ramps: the take-off build-up (~0.9s) and touchdown ease
+      // (~0.7s) last the same real time on short and long hops alike, so a long flight never
+      // leaps to cruise speed in its first frames.
+      const rampUp = clamp(900 / duration, 0.1, 0.4);
+      const rampDown = clamp(700 / duration, 0.1, 0.35);
+      const startScroll = window.scrollY;
+      const startAngle = runtime.figureAngle;
+      // Comfort band the camera must keep the ship inside while it eases into lock — the ship
+      // may surge ahead of the camera at launch, but never out of frame. The band edges ease
+      // in from wherever the ship starts (it can legally sit slightly outside the band on the
+      // pad), so the guard never snaps the scroll on the first frame.
+      const frameTop = 70;
+      const frameBottom = Math.min(window.innerHeight - 90, window.innerHeight * 0.82);
+      const startCenterY = start.y + half - startScroll;
 
-        const scrollDur = clamp((Math.abs(scrollDelta) / speed) * 1000,
-          CONFIG.minWalkDurationMs, CONFIG.maxWalkDurationMs);
-        let prevY = start.y;
-        await animate(scrollDur, (progress) => {
-          const eased = easeInOutCubic(progress);
-          window.scrollTo(0, startScroll + scrollDelta * eased);
-          const y = start.y + shipTravel * eased;
-          Figure.headToward(start.x, prevY, start.x, y); // nose down / up along travel
-          Figure.moveTo(start.x, y);
-          Trail.addPoint(start.x, y);
-          JourneyPortal.ensureAbovePanel();
-          prevY = y;
-        });
-        shipY = shipEndY;
-      }
+      await animate(duration, (progress) => {
+        // Constant perceived speed: trapezoid distance profile → arc-length LUT → t.
+        const t = lut.tForDistance(lut.total * trapezoidDistance(progress, rampUp, rampDown));
+        const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x);
+        const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y);
 
-      // ── Phase 2: page is stationary and the link is parked — arc the ship onto it. The
-      //    control point bows off the chord, perpendicular and away from the console. ──
-      const arcStart = {x: start.x, y: shipY};
-      const target = Figure.targetAtLink(link);
-      const targetX = target.x;
-      const targetY = target.y;
+        // Face the tangent; ease out any initial mismatch between the parked heading and the
+        // curve's first tangent over the accel ramp so the nose never snaps.
+        const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x);
+        const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y);
+        let angle = runtime.figureAngle;
+        if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+        if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
+        Figure.setAngle(angle);
 
-      const dx = targetX - arcStart.x;
-      const dy = targetY - arcStart.y;
-      const span = Math.hypot(dx, dy) || 1;
-      let perpX = -dy / span;
-      let perpY = dx / span;
-      if (perpY > 0) {
-        perpX = -perpX;
-        perpY = -perpY; // keep the bow pointing up
-      }
-      const bow = Math.min(span * 0.32, 200);
-      const ctrlX = (arcStart.x + targetX) / 2 + perpX * bow;
-      const ctrlY = (arcStart.y + targetY) / 2 + perpY * bow;
+        // Camera: scroll so the ship rides the comfort line. Eases into lock over the first
+        // ~0.9s of real time (no jump at launch, and no seconds-long lag on slow hops), then
+        // tracks exactly. The frame guard clamps the reel-in so the ship's center can never
+        // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
+        // near the edges the ship traverses the viewport instead.
+        const follow = clamp(y + half - restLineY, 0, maxScroll);
+        const lockT = Math.min(1, (progress * duration) / 900);
+        const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
+        const guardTop = lerp(Math.min(startCenterY, frameTop), frameTop, lockT);
+        let camera = lerp(startScroll, follow, lockT);
+        camera = clamp(camera, y + half - guardBottom, y + half - guardTop);
+        camera = clamp(camera, 0, maxScroll);
+        window.scrollTo(0, camera);
 
-      const arcPx = span + bow * 0.6;
-      const arcDur = clamp((arcPx / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxWalkDurationMs);
-
-      let prevX = arcStart.x;
-      let prevY = arcStart.y;
-      await animate(arcDur, (progress) => {
-        const eased = easeInOutCubic(progress);
-        const fx = quadBezier(eased, arcStart.x, ctrlX, targetX);
-        const fy = quadBezier(eased, arcStart.y, ctrlY, targetY);
-        // Bank to the path's heading (the bézier tangent ≈ frame-to-frame delta).
-        Figure.headToward(prevX, prevY, fx, fy);
-        Figure.moveTo(fx, fy);
-        Trail.addPoint(fx, fy);
+        Figure.moveTo(x - window.scrollX, y - camera);
+        Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
         JourneyPortal.ensureAbovePanel();
-        prevX = fx;
-        prevY = fy;
       });
 
-      Figure.moveTo(targetX, targetY);
+      // Land on the link's live rect — absorbs any layout shift during the flight.
+      const settled = Figure.targetAtLink(link);
+      Figure.moveTo(settled.x, settled.y);
       Figure.pose('look');
     },
 
     async walkToLink(link) {
       // The cruise already set the ship down on the link; re-snap (in case the page
-      // shifted), settle, and charge the jump drive.
+      // shifted), settle, and charge the jump drive. The link may have been re-hidden DURING
+      // the cruise (MediaWiki collapses navboxes seconds after load) — reopen its container
+      // first so the touchdown lands on painted content, never on a phantom rect.
+      Links.ensureVisible(link);
       const target = Figure.targetAtLink(link);
       Figure.moveTo(target.x, target.y);
       Trail.clearRibbon();                                 // drop the cruise plume, keep embers
@@ -2301,7 +2916,8 @@
 
     // Fallback when the link can't be found in the live DOM: persist the advanced route
     // (and the ship's current screen position, so the next page can drop it out of warp
-    // in the same spot) and navigate straight to the canonical article.
+    // in the same spot), play a degraded "emergency warp" flourish, and navigate straight
+    // to the canonical article.
     async jumpByUrl(nextTitle, nextIndex, route) {
       Storage.save({
         active: true,
@@ -2310,7 +2926,19 @@
         targetTitle: route[route.length - 1],
         entry: Traversal.shipEntry(),
       });
-      await sleep(prefersReducedMotion() ? 0 : 480);
+
+      if (!prefersReducedMotion() && dom.figure?.dataset.visible === 'true') {
+        const slitX = runtime.figurePosition.x + CONFIG.figureSize / 2;
+        const slitY = runtime.figurePosition.y + CONFIG.figureSize / 2;
+        Transition.renderEmergencyWarp({slitX, slitY});
+        Figure.pose('warp');
+        await sleep(420);
+        Figure.hide();
+        await sleep(80);
+      } else {
+        await sleep(prefersReducedMotion() ? 0 : 480);
+      }
+
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
     },
 
@@ -2350,8 +2978,10 @@
   // ─── Links ───────────────────────────────────────────────────────────────────
 
   const Links = {
-    locate(title) {
-      const candidates = Links.candidates(title);
+    // `aliases` (optional) is a list of titles known to redirect to `title` — see
+    // Routing.fetchRedirectAliases — so a live page linking via a redirect alias still matches.
+    locate(title, aliases = []) {
+      const candidates = Links.candidates(title, aliases);
       if (!candidates.length) return null;
 
       const best = Links.bestVisible(candidates);
@@ -2360,36 +2990,167 @@
       return Links.nearestBelowViewport(candidates) || Links.nearestToViewport(candidates);
     },
 
-    candidates(title) {
+    candidates(title, aliases = []) {
       const root =
         document.querySelector(SELECTORS.articleBody) ||
         document.querySelector(SELECTORS.contentRoot) ||
         document.body;
-      return [...root.querySelectorAll('a[href^="/wiki/"]')]
-        .filter((link) => Links.isArticleLink(link))
-        .filter((link) => Links.matchesTitle(link, title));
+      // Cheap string filters first (href parse + title match), then the expensive
+      // computed-style/rect visibility check only on the few links that matched — a Parsoid
+      // article can carry ~2000 internal links and a per-link getComputedStyle scan is slow.
+      return [...root.querySelectorAll(SELECTORS.articleLink)]
+        .filter((link) => Links.isArticleLinkHref(link))
+        .filter((link) => Links.matchesTitle(link, title, aliases))
+        .filter((link) => Links.isVisiblyRendered(link));
     },
 
     // The graph counts ALL namespace-0 links — including those in infoboxes, sidebars,
-    // and bottom navboxes — so match against both the href title and the link's `title`
-    // attribute (the latter catches odd encodings the href parse would miss).
-    matchesTitle(link, title) {
-      if (Titles.same(Titles.fromLink(link), title)) return true;
+    // and bottom navboxes — so match against the href title, the link's `title` attribute
+    // (catches odd encodings the href parse would miss), and any known redirect aliases of
+    // `title` (catches a live page linking via a redirect the graph already resolved through).
+    matchesTitle(link, title, aliases = []) {
+      const linkTitle = Titles.fromLink(link);
+      if (Titles.same(linkTitle, title)) return true;
       const titleAttr = link.getAttribute('title');
-      return Boolean(titleAttr) && Titles.same(titleAttr, title);
+      if (titleAttr && Titles.same(titleAttr, title)) return true;
+      if (aliases.length) {
+        if (aliases.some((alias) => Titles.same(linkTitle, alias))) return true;
+        if (titleAttr && aliases.some((alias) => Titles.same(titleAttr, alias))) return true;
+      }
+      return false;
     },
 
-    isArticleLink(link) {
-      const href = link.getAttribute('href') || '';
-      const title = href.split('#')[0].split('?')[0].replace(/^\/wiki\//, '');
-      if (!title || title.includes(':')) return false;
-      // Only skip edit-section and citation-reference machinery. Navboxes, sidebars, and
-      // infoboxes ARE counted by the graph, so they must stay searchable.
-      if (link.closest('.mw-editsection, .reference, .reflist')) return false;
-      // Allow off-viewport links; only exclude truly hidden elements.
+    // Allow off-viewport links; only exclude truly hidden elements. Excluding hidden ones
+    // makes Links.locate return null for such a target, which is what triggers Links.reveal.
+    //
+    // TWO hidden-by-a-collapsed-ancestor shapes exist and both must be caught:
+    // - display:none ancestor → the link keeps display:inline but renders a 0×0 box.
+    // - `hidden="until-found"` ancestor (how MediaWiki collapses navbox rows for
+    //   find-in-page) → content-visibility:hidden, and the link keeps a NONZERO rect while
+    //   being unpainted — a phantom the display/visibility/rect checks all miss. Only
+    //   checkVisibility() sees through it; without the fix the ship lands in empty space.
+    isVisiblyRendered(link) {
+      const rect = link.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) return false;
+      if (typeof link.checkVisibility === 'function') {
+        return link.checkVisibility(
+          {contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true});
+      }
       const style = window.getComputedStyle(link);
-      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    },
+
+    // The href/namespace test WITHOUT the visibility check — so Links.reveal can find a
+    // target that's currently hidden inside a collapsed container.
+    //
+    // Namespace filtering must be a PREFIX-LIST test, never a blanket "contains a colon":
+    // plenty of namespace-0 articles contain colons ("2001: A Space Odyssey", "Star Trek: The
+    // Next Generation") and the graph includes them — a colon test silently rejected every
+    // anchor to such a title and the flight degraded to a URL-jump with a misleading "link not
+    // visible" report. (Candidates are title-matched against a known ns-0 route title anyway,
+    // so this filter is only an early-out; it must never over-reject.)
+    isArticleLinkHref(link) {
+      const title = Titles.rawFromHref(link.getAttribute('href') || '');
+      if (!title || Links.NAMESPACE_PREFIX_RE.test(title)) return false;
+      // Only skip edit-section links and citation-reference superscripts ([1] → #cite_note).
+      // Navboxes, sidebars, infoboxes, AND the references list itself are all counted by the
+      // graph, so they must stay searchable.
+      if (link.closest('.mw-editsection, .reference')) return false;
       return true;
+    },
+
+    // Known MediaWiki namespaces (href form: underscores, possibly "_talk" variants).
+    NAMESPACE_PREFIX_RE: new RegExp(
+      '^(?:talk|special|wikipedia|wp|project|file|image|media|mediawiki|template|help|' +
+        'category|portal|draft|timedtext|module|user)(?:_talk)?:', 'i'),
+
+    // Some target links live inside collapsed navboxes, collapsed infobox rows, <details>, or
+    // nav dropdowns — the graph counts them but they're display:none on load, so Links.locate
+    // can't see them. Find such a hidden candidate, expand every collapsed container on its
+    // ancestor chain until it's on-page, and return it for the ship to land on. Returns null if
+    // nothing matches (the caller then falls back to a direct URL jump). Never throws.
+    reveal(title, aliases = []) {
+      try {
+        const root =
+          document.querySelector(SELECTORS.articleBody) ||
+          document.querySelector(SELECTORS.contentRoot) ||
+          document.body;
+        const matches = [...root.querySelectorAll(SELECTORS.articleLink)]
+          .filter((link) => Links.isArticleLinkHref(link))
+          .filter((link) => Links.matchesTitle(link, title, aliases));
+        for (const link of matches) {
+          if (Links.ensureVisible(link)) return link;
+        }
+      } catch (error) {
+        console.warn('[Wikinaut] reveal failed', error);
+      }
+      return null;
+    },
+
+    // Make one hidden link visible, preferring the page's own machinery: on a live MediaWiki
+    // collapsible (`.mw-made-collapsible`) click the REAL toggle first — the collapsible code
+    // restores the rows' `hidden="until-found"` attributes and aria state natively — and only
+    // then fall back to attribute/style surgery on the ancestor chain. Also the landing-time
+    // guard: navboxes are made collapsible seconds AFTER load, so a link located while
+    // visible can be re-hidden mid-flight. Returns whether the link is now truly on-page.
+    ensureVisible(link) {
+      if (Links.isOnPage(link)) return true;
+      if (link.closest('.mw-made-collapsible')) Links.clickCollapsibleToggle(link);
+      if (!Links.isOnPage(link)) Links.expandAncestors(link);
+      if (!Links.isOnPage(link)) Links.clickCollapsibleToggle(link);
+      if (!Links.isOnPage(link)) return false;
+      Links.pulseContainer(link);
+      return true;
+    },
+
+    // Brief highlight pulse on the container that was just expanded, so the reveal reads as an
+    // intentional action rather than the page silently shifting under the player.
+    pulseContainer(link) {
+      if (prefersReducedMotion()) return;
+      const container = link.closest('.mw-collapsible, .NavFrame, details, table') || link;
+      container.classList.add('wikinaut-reveal-pulse');
+      window.setTimeout(() => container.classList.remove('wikinaut-reveal-pulse'), 900);
+    },
+
+    // Walk from the link up to the article root, opening anything that hides it: <details>,
+    // MediaWiki collapsibles (which drop `mw-collapsed` and set inline display:none on rows /
+    // content wrappers), legacy `.collapsed`, and generic inline-hidden / [hidden] ancestors.
+    // Clearing display:none only along the link's own chain reveals exactly that link without
+    // disturbing unrelated collapsed content.
+    expandAncestors(link) {
+      let node = link;
+      while (node && node !== document.body && node !== document.documentElement) {
+        if (node.tagName === 'DETAILS' && !node.open) node.open = true;
+        if (node.classList) {
+          node.classList.remove('mw-collapsed');
+          node.classList.remove('collapsed');
+          if (node.classList.contains('vector-dropdown')) node.classList.add('vector-dropdown--active');
+        }
+        if (node.style && node.style.display === 'none') node.style.display = '';
+        if (node.hasAttribute && node.hasAttribute('hidden')) node.removeAttribute('hidden');
+        node = node.parentElement;
+      }
+    },
+
+    // Fallback for JS-driven collapsibles the style reset alone doesn't open: click the nearest
+    // MediaWiki collapsible toggle above the link (lets Wikipedia's own handler expand it).
+    clickCollapsibleToggle(link) {
+      const container = link.closest('.mw-collapsible, .NavFrame');
+      if (!container) return;
+      const toggle = container.querySelector(
+        '.mw-collapsible-toggle, .mw-collapsible-toggle-expanded, .NavToggle, summary');
+      if (toggle && typeof toggle.click === 'function') toggle.click();
+    },
+
+    isOnPage(link) {
+      const rect = link.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return false;
+      if (typeof link.checkVisibility === 'function') {
+        return link.checkVisibility(
+          {contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true});
+      }
+      const style = window.getComputedStyle(link);
+      return style.display !== 'none' && style.visibility !== 'hidden';
     },
 
     bestVisible(links) {
@@ -2489,7 +3250,12 @@
   // ─── Transition (hyperspace jump) ──────────────────────────────────────────────
 
   const Transition = {
-    async tearThrough({link, nextTitle, route, nextIndex}) {
+    // Pure FX: plays the pre-jump orientation + hyperspace departure and returns the jump
+    // anchor (viewport coords of the slit). Does NOT navigate or persist state — the engine
+    // (Traversal.resume) does that once this resolves (or its watchdog times it out), so a
+    // stalled/rejected animation can never block the actual jump. onJumpStart fires right as
+    // the jump visually begins (streaks/flash), so the caller can narrate it at the right beat.
+    async tearThrough({link, onJumpStart}) {
       // Make the link unmistakably visible (scroll it into the clear band + fade the panel
       // so it can never block it), then charge and jump to lightspeed.
       await Transition.ensureInView(link);
@@ -2502,7 +3268,7 @@
 
       rect = link.getBoundingClientRect();
       Object.assign(anchor, Transition.anchorFromLink(link, rect));
-      setStatus(`Jumping to ${nextTitle}…`);
+      if (onJumpStart) onJumpStart();
       LinkFx.clearReticle();
 
       if (!prefersReducedMotion()) {
@@ -2516,24 +3282,7 @@
         await sleep(110);
       }
 
-      Transition.commit(route, nextIndex, anchor);
-      link.click();
-    },
-
-    // Persist the advanced route AND the jump point (viewport coords + heading) so the
-    // next page can drop the ship out of warp in the very same screen spot.
-    commit(route, nextIndex, anchor) {
-      Storage.save({
-        active: true,
-        currentIndex: nextIndex,
-        route,
-        targetTitle: route[route.length - 1],
-        entry: {
-          x: anchor.slitX - CONFIG.figureSize / 2,
-          y: anchor.slitY - CONFIG.figureSize / 2,
-          angle: runtime.figureAngle,
-        },
-      });
+      return anchor;
     },
 
     // The cruise already parks the link at the comfort line, so there's no scroll to do
@@ -2580,10 +3329,17 @@
       dom.ripLayer.style.setProperty('--wn-slit-x', `${Math.round(anchor.slitX)}px`);
       dom.ripLayer.style.setProperty('--wn-slit-y', `${Math.round(anchor.slitY)}px`);
 
+      // Starfield tunnel rushing forward behind the streaks.
+      const tunnel = document.createElement('div');
+      tunnel.className = 'wikinaut-warp-tunnel';
+      tunnel.dataset.mode = mode;
+
+      // Radial star-streaks. Their white→cyan→magenta gradient gives each one its own
+      // chromatic separation; a denser field reads as a faster lightspeed rush.
       const warp = document.createElement('div');
       warp.className = 'wikinaut-warp';
       warp.dataset.mode = mode;
-      const streakCount = 40;
+      const streakCount = 56;
       for (let i = 0; i < streakCount; i += 1) {
         const streak = document.createElement('div');
         streak.className = 'wikinaut-warp-streak';
@@ -2593,27 +3349,96 @@
         warp.append(streak);
       }
 
+      // Expanding motion-blur shock ring, the big flash (with a cyan/magenta chromatic
+      // fringe from its ::before/::after), and a white-hot core bloom on top.
+      const ring = document.createElement('div');
+      ring.className = 'wikinaut-warp-ring';
+      ring.dataset.mode = mode;
       const flash = document.createElement('div');
       flash.className = 'wikinaut-flash';
       flash.dataset.mode = mode;
+      const core = document.createElement('div');
+      core.className = 'wikinaut-warp-core';
+      core.dataset.mode = mode;
 
-      dom.ripLayer.append(warp);
-      dom.ripLayer.append(flash);
+      dom.ripLayer.append(tunnel, warp, ring, flash, core);
+
+      // A brief camera shudder as the drive punches through (departure only).
+      if (mode === 'depart' && dom.root && !prefersReducedMotion()) {
+        dom.root.dataset.warpShake = 'true';
+        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 320);
+      }
+    },
+
+    // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by
+    // coordinates" fallback (Traversal.jumpByUrl) — reuses the hyperspace shapes but visually
+    // distinct (amber, no chromatic split) so the player can tell a degraded jump from a
+    // normal one. Anchored at the ship's current position since there's no link to anchor to.
+    renderEmergencyWarp(anchor) {
+      dom.ripLayer.replaceChildren();
+      dom.ripLayer.dataset.open = 'true';
+      dom.ripLayer.style.setProperty('--wn-slit-x', `${Math.round(anchor.slitX)}px`);
+      dom.ripLayer.style.setProperty('--wn-slit-y', `${Math.round(anchor.slitY)}px`);
+
+      const ring = document.createElement('div');
+      ring.className = 'wikinaut-warp-ring wikinaut-warp-ring-emergency';
+      ring.dataset.mode = 'depart';
+      const flash = document.createElement('div');
+      flash.className = 'wikinaut-flash wikinaut-flash-emergency';
+      flash.dataset.mode = 'depart';
+      dom.ripLayer.append(ring, flash);
     },
   };
 
   // ─── Network helpers ─────────────────────────────────────────────────────────
 
-  function requestJson(url, options = {}) {
-    return requestText(url, options).then((text) => {
-      const data = JSON.parse(text);
-      if (data?.error) {
-        // MediaWiki errors are objects ({code, info}); surface a readable message.
-        const err = data.error;
-        throw new Error(err.info || err.code || (typeof err === 'string' ? err : JSON.stringify(err)));
+  // Parses JSON text, returning undefined (never throwing) on malformed input — callers decide
+  // how to react to an unparsable body.
+  function tryParseJson(text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return undefined;
+    }
+  }
+
+  async function requestJson(url, options = {}) {
+    let text;
+    try {
+      text = await requestText(url, options);
+    } catch (networkErr) {
+      // A non-2xx response may still carry a JSON error body (e.g. our own backend's /paths
+      // 400s: {"error": "...", "code": "page-not-found"}) — prefer that player-facing message
+      // over the generic "Request failed (NNN)" if one is present.
+      if (networkErr.body) {
+        const parsed = tryParseJson(networkErr.body);
+        if (parsed?.error) {
+          const err = new Error(
+            typeof parsed.error === 'string' ? parsed.error : JSON.stringify(parsed.error));
+          err.code = parsed.code ? `backend/${parsed.code}` : undefined;
+          err.status = networkErr.status;
+          throw err;
+        }
       }
-      return data;
-    });
+      throw networkErr;
+    }
+
+    const data = tryParseJson(text);
+    if (data === undefined) {
+      const err = new Error(
+        'The navigation backend sent back something unreadable. Try again in a moment.');
+      err.code = 'wn/backend-bad-response';
+      throw err;
+    }
+    if (data?.error) {
+      // MediaWiki errors are objects ({code, info}); surface a readable message.
+      const mwErr = data.error;
+      const err = new Error(
+        mwErr.info || mwErr.code || (typeof mwErr === 'string' ? mwErr : JSON.stringify(mwErr)));
+      err.code = data.code ? `backend/${data.code}` : undefined;
+      throw err;
+    }
+    return data;
   }
 
   function requestText(url, options = {}) {
@@ -2630,22 +3455,31 @@
             if (response.status >= 200 && response.status < 300) {
               resolve(response.responseText);
             } else {
-              reject(new Error(`Request failed (${response.status})`));
+              const err = new Error(`Request failed (${response.status})`);
+              err.status = response.status;
+              err.body = response.responseText;
+              reject(err);
             }
           },
           ontimeout() {
-            reject(new Error('Request timed out.'));
+            reject(Object.assign(new Error('Request timed out.'), {code: 'wn/backend-timeout'}));
           },
           onerror() {
-            reject(new Error('Network request failed.'));
+            reject(Object.assign(new Error('Network request failed.'), {code: 'wn/backend-unreachable'}));
           },
         });
       });
     }
 
     return fetch(url, options).then(async (response) => {
-      if (!response.ok) throw new Error(`Request failed (${response.status})`);
-      return response.text();
+      const text = await response.text();
+      if (!response.ok) {
+        const err = new Error(`Request failed (${response.status})`);
+        err.status = response.status;
+        err.body = text;
+        throw err;
+      }
+      return text;
     });
   }
 
@@ -2687,18 +3521,135 @@
     return Math.max(min, Math.min(max, value));
   }
 
-  function easeInOutCubic(value) {
-    return value < 0.5 ? 4 * value * value * value : 1 - Math.pow(-2 * value + 2, 3) / 2;
-  }
-
   function easeInCubic(value) {
     return value * value * value;
   }
 
-  // Quadratic bézier on one axis: p0 → (control) p1 → p2.
-  function quadBezier(t, p0, p1, p2) {
+  // Cubic bézier on one axis: p0 → (controls) p1, p2 → p3.
+  function cubicBezier(t, p0, p1, p2, p3) {
     const inv = 1 - t;
-    return inv * inv * p0 + 2 * inv * t * p1 + t * t * p2;
+    return inv * inv * inv * p0 + 3 * inv * inv * t * p1 + 3 * inv * t * t * p2 + t * t * t * p3;
+  }
+
+  // First derivative of the cubic — the flight uses it as the true tangent for the ship's
+  // heading (no frame-delta approximation).
+  function cubicBezierDerivative(t, p0, p1, p2, p3) {
+    const inv = 1 - t;
+    return 3 * inv * inv * (p1 - p0) + 6 * inv * t * (p2 - p1) + 3 * t * t * (p3 - p2);
+  }
+
+  // Shortest-arc interpolation between two headings in degrees (never swings the long way
+  // around), for easing the nose onto a new curve without a snap.
+  function lerpAngle(fromDeg, toDeg, t) {
+    const diff = ((toDeg - fromDeg + 540) % 360) - 180;
+    return fromDeg + diff * t;
+  }
+
+  // One graceful banking curve from `start` to `end` (document coords), departing along
+  // `headingDeg`. Both control points are constrained to a single side of the chord, which
+  // for a cubic guarantees the curvature never changes sign — exactly one banking turn,
+  // never an S-curve. The bank side falls out of the geometry: whichever side of the chord
+  // the ship's current heading already deviates toward.
+  function buildFlightPath(start, end, headingDeg) {
+    const chordX = end.x - start.x;
+    const chordY = end.y - start.y;
+    const span = Math.hypot(chordX, chordY);
+    if (span < 1) {
+      return {p0: {...start}, p1: {...start}, p2: {...end}, p3: {...end}};
+    }
+    const ux = chordX / span;
+    const uy = chordY / span;
+    const rad = (headingDeg * Math.PI) / 180;
+    const hx = Math.cos(rad);
+    const hy = Math.sin(rad);
+    const cross = ux * hy - uy * hx;   // signed side of the chord the heading deviates toward
+    const dot = ux * hx + uy * hy;
+    const handle = Math.min(span * 0.35, 260);
+
+    // Heading nearly parallel to the chord → essentially straight. Heading pointing sharply
+    // backwards → honoring it would demand a loop a single bend can't express; fly straight
+    // and let the caller's angle ease-in absorb the turn.
+    if (Math.abs(Math.atan2(cross, dot)) < Math.PI / 22.5 || dot < -0.2) {
+      return {
+        p0: {...start},
+        p1: {x: start.x + chordX / 3, y: start.y + chordY / 3},
+        p2: {x: start.x + (2 * chordX) / 3, y: start.y + (2 * chordY) / 3},
+        p3: {...end},
+      };
+    }
+
+    const side = cross >= 0 ? 1 : -1;
+    // Depart along the current heading (P1 lands on the bank side by construction)…
+    const p1 = {x: start.x + hx * handle, y: start.y + hy * handle};
+    // …and arrive along the chord tilted a few degrees, phased so P2 lands on the SAME side.
+    const theta = (-side * 18 * Math.PI) / 180;
+    const ax = ux * Math.cos(theta) - uy * Math.sin(theta);
+    const ay = ux * Math.sin(theta) + uy * Math.cos(theta);
+    const p2 = {x: end.x - ax * handle, y: end.y - ay * handle};
+
+    // Belt-and-braces: if an extreme heading still left the pair straddling the chord,
+    // reflect P2 across it (preserves the arrival distance, restores the single-side rule).
+    const sideOf = (p) => chordX * (p.y - start.y) - chordY * (p.x - start.x);
+    if (sideOf(p1) * sideOf(p2) < 0) {
+      const t = ((p2.x - start.x) * chordX + (p2.y - start.y) * chordY) / (span * span);
+      const footX = start.x + chordX * t;
+      const footY = start.y + chordY * t;
+      p2.x = 2 * footX - p2.x;
+      p2.y = 2 * footY - p2.y;
+    }
+    return {p0: {...start}, p1, p2, p3: {...end}};
+  }
+
+  // Arc-length lookup for a cubic: maps distance-traveled → curve parameter t, so the ship
+  // moves at constant speed no matter how unevenly t maps to distance along the curve.
+  function buildArcLengthLut(p0, p1, p2, p3, samples = 96) {
+    const ts = [0];
+    const ds = [0];
+    let total = 0;
+    let prevX = p0.x;
+    let prevY = p0.y;
+    for (let i = 1; i <= samples; i += 1) {
+      const t = i / samples;
+      const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x);
+      const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y);
+      total += Math.hypot(x - prevX, y - prevY);
+      ts.push(t);
+      ds.push(total);
+      prevX = x;
+      prevY = y;
+    }
+    return {
+      total,
+      tForDistance(dist) {
+        const d = clamp(dist, 0, total);
+        let lo = 0;
+        let hi = ds.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (ds[mid] < d) lo = mid + 1;
+          else hi = mid;
+        }
+        if (lo === 0) return 0;
+        const seg = ds[lo] - ds[lo - 1] || 1;
+        return ts[lo - 1] + (ts[lo] - ts[lo - 1]) * ((d - ds[lo - 1]) / seg);
+      },
+    };
+  }
+
+  // Trapezoid velocity profile: accel/decel ramps at each end, constant cruise between.
+  // Maps normalized time → normalized distance, so speed reads as constant without a harsh
+  // full-speed landing. Ramps may be asymmetric (a longer, more visible take-off build-up
+  // than the touchdown ease) — the caller derives them from wall-clock time so the launch
+  // surge lasts the same real duration on short and long hops alike.
+  function trapezoidDistance(progress, rampUp = 0.12, rampDown = rampUp) {
+    const p = clamp(progress, 0, 1);
+    const vPeak = 1 / (1 - (rampUp + rampDown) / 2);
+    if (p < rampUp) return (vPeak * p * p) / (2 * rampUp);
+    if (p > 1 - rampDown) {
+      const q = 1 - p;
+      return 1 - (vPeak * q * q) / (2 * rampDown);
+    }
+    return vPeak * (p - rampUp / 2);
   }
 
   function hexToRgb(hex) {
@@ -2755,10 +3706,18 @@
     const state = Storage.load();
     if (state?.route?.length) {
       runtime.route = state.route;
+      // Restore the full route set (pre-launch only) so the cycler survives a reload.
+      if (Array.isArray(state.routes) && state.routes.length > 1 && !state.active) {
+        runtime.routes = state.routes;
+        runtime.routeIndex = Number.isInteger(state.routeIndex) ? state.routeIndex : 0;
+      }
       dom.input.value = state.targetTitle || state.route[state.route.length - 1] || '';
       // A saved course counts as a locked destination so Chart stays usable on reload.
       runtime.selectedPage = dom.input.value || null;
-      renderRoute(state.route, state.currentIndex || 0, (state.currentIndex || 0) + 1);
+      renderRoute(
+        state.route, state.currentIndex || 0, (state.currentIndex || 0) + 1, alternateRoutes(),
+        runtime.routeIndex);
+      updateRouteCycle();
       if (state.active) {
         setStatus('Resuming course — picking up where the ship left off…');
         window.setTimeout(() => Traversal.resume(), 420);

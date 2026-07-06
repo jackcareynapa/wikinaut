@@ -3,8 +3,7 @@
 .github
 scripts
 docs
-sketch
-config
+tests
 env
 dump
 *.sqlite
@@ -12,6 +11,7 @@ dump
 *.user.js
 *.md
 setup.cfg
+requirements-dev.txt
 fly.toml
 Dockerfile
 .dockerignore

@@ -22,7 +22,7 @@ split:
    file (disk-bound; see algorithm notes). This is reused almost as-is from upstream.
    It already returns *all* shortest paths for a query, which is what powers the
    "choose between multiple paths" feature — no extra work needed there. Deployed to
-   Fly.io (see `docs/deployment.md`).
+   Fly.io (see `docs/web-server-setup.md`).
 
 2. **Frontend (`wikinaut.user.js`, the Tampermonkey userscript)** — runs on
    `en.wikipedia.org` article pages. Injects the space-themed console panel, takes a
@@ -45,7 +45,7 @@ sdow/             Python package: server.py (Flask app), breadth_first_search.py
                   database.py, helpers.py
 scripts/          buildDatabase.sh + friends — download + process Wikipedia dumps into SQLite
 sql/              SQLite table schemas
-docs/             Documentation, including deployment.md (Fly.io) and data-source.md (build)
+docs/             Documentation, including web-server-setup.md (Fly.io) and data-source.md (build)
 wikinaut.user.js  The Tampermonkey userscript (Wikinaut frontend)
 Dockerfile        Backend container image (used by the Fly.io deploy)
 fly.toml          Fly.io app config
@@ -105,6 +105,21 @@ article. Three things to handle:
   infoboxes, bottom navboxes, and collapsed sections — not just the article body. The
   "next" link may be buried. Scan the whole page:
   `a[href*="/wiki/<Target_Title>"]`, handling URL-encoding and underscore/space.
+- **Two renderers, two href forms.** Wikipedia serves articles from the legacy parser
+  (relative hrefs: `/wiki/Foo`) AND from Parsoid read views (protocol-relative absolute
+  hrefs: `//en.wikipedia.org/wiki/Foo`), rolled out per-article. Matching only the legacy
+  form finds ZERO links on a Parsoid page — every hop there falsely reports "link not on
+  page". Never prefix-match hrefs directly: normalize through `Titles.rawFromHref` (URL
+  parse + same-hostname + `/wiki/` pathname check, which also rejects Commons/Wiktionary
+  links that contain "/wiki/") and select with `SELECTORS.articleLink`.
+- **Phantom rects in collapsed navboxes.** MediaWiki collapses navbox rows with
+  `hidden="until-found"` (`content-visibility: hidden`) — links inside keep a NONZERO
+  bounding rect while being unpainted, so display/visibility/0×0-rect checks all pass and the
+  ship lands in empty space. Only `element.checkVisibility({contentVisibilityAuto: true, …})`
+  sees through it — visibility tests must go through `Links.isVisiblyRendered`/`isOnPage`.
+  Also a race: navboxes are made collapsible seconds AFTER page load, so a link located while
+  visible can be re-hidden mid-flight — guard at flight start and touchdown
+  (`Links.ensureVisible`).
 - **Snapshot vs. live staleness.** The graph is a dump from a fixed date; the player
   walks *current* Wikipedia. A link present in the dump may have been removed from the
   live page → dead end. Always provide a fallback: if the expected link isn't in the
@@ -162,11 +177,11 @@ docker build -t wikinaut-api . && \
 node --check wikinaut.user.js
 ```
 
-See `docs/deployment.md` for the full Fly.io deploy (GCE graph build → volume → `fly deploy`).
+See `docs/web-server-setup.md` for the full Fly.io deploy (GCE graph build → volume → `fly deploy`).
 
 ## Operating the deployed Fly backend (hard-won gotchas)
 
-These bit us once; don't relearn them. (Full runbook: `docs/deployment.md` Step 4.)
+These bit us once; don't relearn them. (Full runbook: `docs/web-server-setup.md` Step 4.)
 
 - **`server.py` opens BOTH `./sdow.sqlite` and `./searches.sqlite` at import time** (with gunicorn's
   `--chdir /data`, those are `/data/sdow.sqlite` + `/data/searches.sqlite`). If *either* is missing on

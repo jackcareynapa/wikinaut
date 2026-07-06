@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS links
   incoming_links TEXT NOT NULL
 );
 
+-- Load the tab-separated links file (piped in by buildDatabase.sh) from stdin. `.mode csv` with a
+-- tab `.separator` treats each line as one row split on tabs, matching the trimmed dump format.
 .mode csv
 .separator "\t"
 .import /dev/stdin links

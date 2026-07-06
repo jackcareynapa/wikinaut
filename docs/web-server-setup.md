@@ -1,4 +1,4 @@
-# Deploying the Wikinaut backend (Fly.io)
+# Wikinaut backend — production web server setup (Fly.io)
 
 The Wikinaut backend is the forked `sdow` Flask API. It answers `POST /paths` (shortest-path
 queries) and `GET /ok` (health check) over the Wikipedia link graph stored in a single SQLite file
@@ -10,6 +10,18 @@ multi-gigabyte disk and the process must stay resident.
 
 You provide the SQLite graph; the repo provides the `Dockerfile` and `fly.toml`.
 
+> For **local development** against the tiny mock database (no full graph, no Fly account), see
+> [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md). For **building the graph**, see
+> [`data-source.md`](./data-source.md).
+
+## Prerequisites
+
+- A Wikipedia link graph built per [`data-source.md`](./data-source.md); the build produces
+  `scripts/dump/wikinaut.sqlite`.
+- [`flyctl`](https://fly.io/docs/flyctl/install/) installed and authenticated (`fly auth login`).
+- A location the Fly machine can fetch the graph from. This guide uses a Google Cloud Storage
+  bucket + `gsutil`, but any reachable URL works.
+
 ## How the container finds the database
 
 The image (see [`Dockerfile`](../Dockerfile)) contains only the code. The databases live on the
@@ -20,56 +32,58 @@ working directory, so gunicorn is launched with:
 gunicorn --chdir /data --pythonpath /app --bind 0.0.0.0:8080 --workers 2 sdow.server:app
 ```
 
-`--chdir /data` makes the relative DB paths resolve onto the volume, `--pythonpath /app` keeps the
-`sdow` package importable, and binding the bare `sdow.server:app` (rather than
-`load_app("prod")`) skips Google Cloud logging, which would otherwise require GCP credentials. No
-code changes are needed.
+`--chdir /data` makes the relative DB paths resolve onto the volume, and `--pythonpath /app` keeps
+the `sdow` package importable. No code changes are needed.
 
-## Step 1 — Build the graph on a GCE VM
+## Environment variables
 
-Building the graph downloads multi-gigabyte Wikipedia dumps and processes them; it needs a
-high-memory machine and lots of scratch disk, and takes a couple of hours. (See
-[`data-source.md`](./data-source.md) for the full pipeline and the all-important `linktarget`
-schema note.)
+The backend needs **no environment variables** at runtime. Configuration lives in two places:
 
-**Sizing it** (figures from the 2026-06-01 enwiki dump): the downloads total ~11 GB compressed
-(`pagelinks` ~7.0 GB, `page` ~2.4 GB, `linktarget` ~1.4 GB, `redirect` ~0.2 GB). Two things drive
-the machine spec:
-- **RAM** — the `linktarget` join (`replace_link_targets_in_links_file.py`) holds the whole
-  namespace-0 link-target map in memory (tens of millions of entries, roughly **4–7 GB resident**),
-  and `buildDatabase.sh` runs `sort -S 80%` which wants buffer space. **32 GB is comfortable, 64 GB
-  is generous.** 16 GB works but sort spills to disk and it's tight.
-- **Disk** — the dumps are only ~11 GB, but the pipeline *keeps every* multi-GB intermediate
-  (`links.*`, sorted, grouped, `with_counts`) plus the ~14 GB final SQLite and its `.gz`, so budget
-  **~200 GB SSD**.
+- **`fly.toml`** — app name, `primary_region`, volume mount, health check, VM size.
+- **`Dockerfile` CMD** — the gunicorn flags (`--chdir /data`, `--pythonpath /app`, workers, timeout).
 
-1. Create a Compute Engine VM — **`e2-highmem-8`** (8 vCPU / 64 GB) for a faster build, or
-   **`e2-highmem-4`** (4 vCPU / 32 GB) for a cheaper one-off — with a **200 GB+ SSD** (`pd-ssd` or
-   `pd-balanced`) and a recent Debian.
-2. SSH in and install dependencies:
-   ```bash
-   sudo apt-get -q update
-   sudo apt-get -yq install git pigz sqlite3 python3 aria2
-   ```
-3. Clone and build (use `screen`/`tmux` so a dropped connection doesn't kill the build):
-   ```bash
-   git clone https://github.com/jackcareynapa/wikinaut.git
-   cd wikinaut/scripts
-   ./buildDatabase.sh            # or ./buildDatabase.sh <YYYYMMDD> for a specific dump
-   ```
-   This produces `wikinaut/scripts/dump/sdow.sqlite`.
+The backend uses Python's standard `logging` module only; there is no remote/GCP logging
+integration (an earlier `load_app('prod')` + `google-cloud-logging` path was removed — it was never
+exercised in production and only added an unused dependency + boot-time import). `fly logs` /
+`fly ssh console` are the way to see server logs. Errors are tagged in the log message where it
+matters for triage — e.g. `[sqlite]` prefixes a database-layer failure so it's distinguishable from
+an application bug.
+
+## Database location & creation
+
+`server.py` opens `./sdow.sqlite` and `./searches.sqlite` relative to its working directory; with
+gunicorn's `--chdir /data`, those resolve to `/data/sdow.sqlite` and `/data/searches.sqlite` on the
+mounted volume. Two hard requirements:
+
+- **Both files must exist** before the app can serve. `server.py` opens both at import time, so if
+  *either* is missing every worker raises `IOError` ~7 s after boot and the machine crash-loops to
+  `stopped`. `searches.sqlite` starts empty (seeded from `sql/createSearchesTable.sql`);
+  `sdow.sqlite` is your built graph.
+- **The volume's region MUST match `fly.toml`'s `primary_region`** (`sjc`). A machine booting in a
+  different region gets a fresh, empty volume instead of your data.
+
+Steps 1–4 build, stage, and load the graph.
+
+## Step 1 — Build the graph
+
+Build the SQLite graph on a high-memory Linux VM following [`data-source.md`](./data-source.md)
+(downloads multi-gigabyte Wikipedia dumps, ~2 hours, needs roughly 32 GB RAM + 200 GB SSD). The
+build produces **`scripts/dump/wikinaut.sqlite`**.
+
+The rest of this guide only needs that finished file; the full pipeline and sizing details live in
+`data-source.md` and are not repeated here.
 
 ## Step 2 — Stage the graph somewhere reachable
 
-From the GCE VM, copy the file to a Google Cloud Storage bucket (or any URL the Fly machine can
+From the build VM, copy the file to a Google Cloud Storage bucket (or any URL the Fly machine can
 reach):
 
 ```bash
-gsutil cp dump/sdow.sqlite gs://wikinaut-dumps/wikinaut.sqlite
+gsutil cp dump/wikinaut.sqlite gs://wikinaut-dumps/wikinaut.sqlite
 ```
 
-> Note the object name (`wikinaut.sqlite`) differs from the filename the app opens (`sdow.sqlite`);
-> Step 4 renames it on the way onto the volume.
+> The app opens the file as `sdow.sqlite`, but the build output — and this bucket object — is
+> `wikinaut.sqlite`. Step 4 renames it to `sdow.sqlite` on the way onto the volume.
 
 ## Step 3 — Create the Fly app and volume
 
@@ -85,6 +99,14 @@ fly deploy                            # builds the Dockerfile and boots one mach
 The first boot has no database yet, so the health check will fail until Step 4 — that's expected.
 
 ## Step 4 — Load the database onto the volume
+
+**Preflight, before you start** (the three things that bite if skipped):
+- The volume's region **must match** `fly.toml`'s `primary_region` (`sjc`) — a mismatch boots a
+  fresh, empty volume instead of your data.
+- **Both** `sdow.sqlite` and `searches.sqlite` must end up on `/data` — either missing crash-loops
+  every worker (see the preflight check below).
+- The bucket object is `wikinaut.sqlite`; the app opens `sdow.sqlite` — **rename on the way in**
+  (step 3 below does this with an atomic `os.replace`, only once the transfer is complete).
 
 ⚠️ **Cold-start chicken-and-egg:** `server.py` opens *both* `sdow.sqlite` and `searches.sqlite` at
 import, so on an empty volume every worker crashes ~7 s after boot and the machine sits `stopped` —
@@ -158,14 +180,20 @@ fly deploy
 
 ## Step 5 — Verify
 
+Run this after every deploy (initial load or a redeploy) — the three checks together confirm the
+DBs are present, a real query resolves, and request validation is doing its job:
+
 ```bash
 curl https://wikinaut-api.fly.dev/ok
 curl -X POST https://wikinaut-api.fly.dev/paths \
   -H 'content-type: application/json' \
   -d '{"source":"Cat","target":"Dog"}'
+curl -i -X POST https://wikinaut-api.fly.dev/paths \
+  -H 'content-type: application/json' -d '{}'   # expect HTTP 400, {"code":"bad-request",...}
 ```
 
-`/ok` should return a JSON timestamp and `/paths` should return a `paths` array.
+`/ok` should return a JSON timestamp, the `Cat`→`Dog` query should return a `paths` array, and the
+malformed request should come back as a `400` (not a `500`) with a `code` field.
 
 ## Step 6 — Point the userscript at it
 
@@ -173,18 +201,76 @@ The userscript ([`wikinaut.user.js`](../wikinaut.user.js)) already defaults to
 `https://wikinaut-api.fly.dev`. If you used a different Fly app name, update the `apiBaseUrl`
 constant near the top of the script **and** its `@connect` directive. Anyone can also override the
 backend at runtime via the panel's **Settings → Backend URL** field (handy for pointing at a local
-`flask run` during development).
+`flask run` during development — see [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md)).
 
-## Local container smoke test
+## Process manager / service
 
-You can validate the image without the full graph by mounting the mock database:
+There is no separate init system or supervisor inside the container: **gunicorn is PID 1**, launched
+by the Dockerfile `CMD` (2 workers, 120 s timeout). **Fly.io is the process supervisor** — `fly.toml`
+sets `min_machines_running = 1`, `auto_start_machines = true`, and a `/ok` health check, so Fly keeps
+the machine up and restarts it if the check fails or the process dies.
+
+To do maintenance on the volume without gunicorn running (e.g. to load or repair the DB), override
+the machine command so it doesn't crash-loop, then restore it afterwards:
 
 ```bash
-python3 scripts/create_mock_databases.py            # writes sdow/sdow.sqlite + sdow/searches.sqlite
-mkdir -p /tmp/wikinaut-data && cp sdow/*.sqlite /tmp/wikinaut-data/
-docker build -t wikinaut-api .
-docker run --rm -p 8085:8080 -v /tmp/wikinaut-data:/data wikinaut-api
-# in another shell:
-curl localhost:8085/ok
-curl -X POST localhost:8085/paths -H 'content-type: application/json' -d '{"source":"1","target":"6"}'
+fly machine update <machine-id> -C "sleep infinity" --yes && fly machine start <machine-id>
+# ... work on /data ...
+fly deploy   # regenerates the machine config from the Dockerfile CMD
 ```
+
+## Reverse proxy & TLS
+
+Fly's edge proxy terminates TLS and forwards to the container's internal port 8080 (`fly.toml`
+`[http_service]`, `internal_port = 8080`). `force_https = true` upgrades HTTP to HTTPS, so the public
+endpoint is `https://<app>.fly.dev`. You do **not** need to run your own nginx/Caddy. The app also
+enables permissive CORS (`flask-cors`), though the userscript reaches the API via `GM_xmlhttpRequest`
+(which sidesteps CORS anyway).
+
+## Security notes
+
+- **Never put a GCP access token on the Fly host.** Loading the graph uses either a server-side
+  public download (bucket opened only for the load, then locked back down) or a stream through your
+  locally-authed `gsutil` — see Step 4. A token on the host is credential leakage and is blocked
+  besides.
+- **Lock the bucket back down** after loading (Step 4.4): remove `allUsers:objectViewer` and
+  re-enforce Public Access Prevention.
+- The API is unauthenticated and read-only over a public dataset — there is nothing secret in it. To
+  curb abuse, put it behind Fly's rate limiting or a token check (out of scope here).
+
+## Logs
+
+```bash
+fly logs                    # live tail
+fly logs -a wikinaut-api    # explicit app
+```
+
+A crash-loop from a missing database shows as the machine cycling to `stopped` shortly after each
+boot (see [Database location & creation](#database-location--creation)).
+
+## Backups
+
+The graph is fully reproducible from the Wikipedia dump (rebuild per
+[`data-source.md`](./data-source.md)), so the volume isn't precious — but you can snapshot it:
+
+```bash
+fly volumes list
+fly volumes snapshots list <volume-id>
+fly volumes snapshots create <volume-id>
+```
+
+`searches.sqlite` (the historical search log) is the only non-reproducible data, and it isn't
+required to run the service.
+
+## Updating / redeploying
+
+- **Code or config change:** `fly deploy` rebuilds the image from the Dockerfile and boots a fresh
+  machine (config regenerated from the Dockerfile CMD, clearing any `sleep infinity` override). The
+  volume and its data persist across deploys.
+- **New Wikipedia graph:** build a fresh `wikinaut.sqlite` ([`data-source.md`](./data-source.md)),
+  stage it (Step 2), load it onto the volume (Step 4, using the `sleep infinity` trick so you're not
+  fighting the health check), then `fly deploy`. Because the app opens `sdow.sqlite`, do the atomic
+  rename only after the new file has fully transferred.
+
+To validate the production image locally before deploying, use the container smoke test in
+[`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).

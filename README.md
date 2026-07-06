@@ -68,21 +68,22 @@ cd scripts/ && ./buildDatabase.sh            # latest dump, or ./buildDatabase.s
 ```
 
 The build downloads the `page`, `redirect`, `pagelinks`, and `linktarget` dumps and processes them
-into a single `sdow.sqlite`. See [Data Source](./docs/data-source.md) for details — including the
+into a single SQLite graph (`scripts/dump/wikinaut.sqlite`). See [Data Source](./docs/data-source.md)
+for details — including the
 2024 `pagelinks` → `linktarget` schema change that Wikinaut's build pipeline handles.
 
 ## Deploy the backend
 
 Wikinaut's backend is deployed to **Fly.io** as an always-on container with the SQLite graph on a
 persistent volume. The repo ships a `Dockerfile` and `fly.toml`; see
-**[Deployment](./docs/deployment.md)** for the full runbook (build the graph on GCE → load it onto
-the Fly volume → `fly deploy`).
+**[Web server setup](./docs/web-server-setup.md)** for the full runbook (build the graph on GCE →
+load it onto the Fly volume → `fly deploy`).
 
 ## Documentation
 
-- [Deployment](./docs/deployment.md) — deploy the backend to Fly.io.
+- [Web server setup](./docs/web-server-setup.md) — deploy the backend to Fly.io.
 - [Data Source](./docs/data-source.md) — where the data comes from and how the graph is built.
-- [Local Setup](./.github/CONTRIBUTING.md) — set up your machine to run Wikinaut locally.
+- [Contributing](./.github/CONTRIBUTING.md) — set up your machine to run Wikinaut locally.
 
 ## Algorithm
 

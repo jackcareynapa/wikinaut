@@ -12,31 +12,50 @@ from collections import defaultdict
 sys.stdout.reconfigure(encoding='utf-8', errors='surrogateescape')
 
 # Validate input arguments.
-if len(sys.argv) < 2:
+if len(sys.argv) < 3:
   print('[ERROR] Not enough arguments provided!')
   print('[INFO] Usage: {0} <outgoing_links_file> <incoming_links_file>'.format(sys.argv[0]))
-  sys.exit()
+  sys.exit(1)
 
 OUTGOING_LINKS_FILE = sys.argv[1]
 INCOMING_LINKS_FILE = sys.argv[2]
 
 if not OUTGOING_LINKS_FILE.endswith('.gz'):
   print('[ERROR] Outgoing links file must be gzipped.')
-  sys.exit()
+  sys.exit(1)
 
 if not INCOMING_LINKS_FILE.endswith('.gz'):
   print('[ERROR] Incoming links file must be gzipped.')
-  sys.exit()
+  sys.exit(1)
+
+SCRIPT_NAME = 'combine_grouped_links_files'
 
 # Create a dictionary of page IDs to their incoming and outgoing links.
 LINKS = defaultdict(lambda: defaultdict(str))
-for line in gzip.open(OUTGOING_LINKS_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [source_page_id, target_page_ids] = line.rstrip('\n').split('\t')
-  LINKS[source_page_id]['outgoing'] = target_page_ids
 
+skipped_outgoing = 0
+for line in gzip.open(OUTGOING_LINKS_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
+  parts = line.rstrip('\n').split('\t')
+  if len(parts) != 2:
+    skipped_outgoing += 1
+    continue
+  source_page_id, target_page_ids = parts
+  LINKS[source_page_id]['outgoing'] = target_page_ids
+if skipped_outgoing:
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_outgoing} malformed line(s) in outgoing links file',
+        file=sys.stderr)
+
+skipped_incoming = 0
 for line in gzip.open(INCOMING_LINKS_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [target_page_id, source_page_ids] = line.rstrip('\n').split('\t')
+  parts = line.rstrip('\n').split('\t')
+  if len(parts) != 2:
+    skipped_incoming += 1
+    continue
+  target_page_id, source_page_ids = parts
   LINKS[target_page_id]['incoming'] = source_page_ids
+if skipped_incoming:
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_incoming} malformed line(s) in incoming links file',
+        file=sys.stderr)
 
 # For each page in the links dictionary, print out its incoming and outgoing links as well as their
 # counts.

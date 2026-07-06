@@ -13,11 +13,18 @@ class Database(object):
   """Wrapper for connecting to the SDOW database."""
 
   def __init__(self, sdow_database, searches_database):
+    # Both files must exist before the app can serve — a missing one crash-loops every worker.
+    # See docs/web-server-setup.md, Step 4 ("Database location & creation") for the recovery
+    # runbook (how to keep a crash-looping machine alive to load the volume).
     if not os.path.isfile(sdow_database):
-      raise IOError('Specified SQLite file "{0}" does not exist.'.format(sdow_database))
+      raise IOError(
+          'Specified SQLite file "{0}" does not exist. See docs/web-server-setup.md Step 4.'
+          .format(sdow_database))
 
     if not os.path.isfile(searches_database):
-      raise IOError('Specified SQLite file "{0}" does not exist.'.format(searches_database))
+      raise IOError(
+          'Specified SQLite file "{0}" does not exist. See docs/web-server-setup.md Step 4.'
+          .format(searches_database))
 
     self.sdow_conn = sqlite3.connect(sdow_database, check_same_thread=False)
     self.searches_conn = sqlite3.connect(searches_database, check_same_thread=False)
@@ -75,8 +82,9 @@ class Database(object):
 
     result = self.sdow_cursor.fetchone()
 
-    # TODO: This will no longer be required once the April 2018 database dump occurs since this
-    # scenario is prevented by the prune_pages_file.py Python script during the database creation.
+    # This should be unreachable in a database built by the current pipeline: prune_pages_file.py
+    # drops pages flagged as redirects with no corresponding redirects-table row. Kept as a guard
+    # in case an older or hand-built database reaches this code path.
     if not result:
       raise ValueError(
           'Invalid page title {0} provided. Page title does not exist.'.format(page_title))
