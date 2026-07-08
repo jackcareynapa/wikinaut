@@ -4,9 +4,18 @@ Wrapper for reading from and writing to the SDOW database.
 
 import os.path
 import sqlite3
+import urllib.parse
+from collections import OrderedDict
 
 import sdow.helpers as helpers
 from sdow.breadth_first_search import breadth_first_search
+
+# Maximum number of (source, target) -> paths results kept in the in-process LRU cache.
+PATHS_CACHE_MAX_SIZE = 512
+
+# Page-title lookups are chunked so the parameterized IN list stays well under SQLite's
+# default 999-variable limit.
+PAGE_TITLES_CHUNK_SIZE = 500
 
 
 class Database(object):
@@ -26,7 +35,12 @@ class Database(object):
           'Specified SQLite file "{0}" does not exist. See docs/web-server-setup.md Step 4.'
           .format(searches_database))
 
-    self.sdow_conn = sqlite3.connect(sdow_database, check_same_thread=False)
+    # The graph database is opened read-only and immutable: nothing writes it while serving, and
+    # immutable=1 lets SQLite skip all locking/change detection. If the file is ever replaced
+    # under a running server (see the web-server-setup.md runbook), the app must be restarted.
+    self.sdow_conn = sqlite3.connect(
+        'file:{0}?mode=ro&immutable=1'.format(urllib.parse.quote(sdow_database)),
+        uri=True, check_same_thread=False)
     self.searches_conn = sqlite3.connect(searches_database, check_same_thread=False)
 
     self.sdow_cursor = self.sdow_conn.cursor()
@@ -34,6 +48,19 @@ class Database(object):
 
     self.sdow_cursor.arraysize = 1000
     self.searches_cursor.arraysize = 1000
+
+    # mmap_size lets reads on the multi-GB graph go through the OS page cache instead of
+    # SQLite's own read path (mmap is file-backed and shared — it does not count against RSS);
+    # cache_size is 64 MB of page cache for the B-tree interior pages.
+    self.sdow_cursor.execute('PRAGMA mmap_size = 1073741824;')
+    self.sdow_cursor.execute('PRAGMA cache_size = -65536;')
+    self.sdow_cursor.execute('PRAGMA temp_store = MEMORY;')
+
+    # WAL keeps the per-request analytics INSERT from fsync-stalling a response.
+    self.searches_cursor.execute('PRAGMA journal_mode = WAL;')
+    self.searches_cursor.execute('PRAGMA synchronous = NORMAL;')
+
+    self._paths_cache = OrderedDict()
 
   def fetch_page(self, page_title):
     """Returns the ID and title of the non-redirect page corresponding to the provided title,
@@ -91,34 +118,40 @@ class Database(object):
 
     return (result[0], helpers.get_readable_page_title(result[1]), True)
 
-  def fetch_page_title(self, page_id):
-    """Returns the page title corresponding to the provided page ID.
+  def fetch_page_titles(self, page_ids):
+    """Returns page info (title and URL) for the provided page IDs from the local pages table.
 
     Args:
-      page_id: The page ID whose ID to fetch.
+      page_ids: An iterable of integer page IDs whose info to fetch.
 
     Returns:
-      str: The page title corresponding to the provided page ID.
-
-    Raises:
-      ValueError: If the provided page ID is invalid or does not exist.
+      dict: A dictionary keyed by integer page ID, each value a dict with 'title' (human-readable)
+        and 'url'. IDs not present in the pages table are omitted.
     """
-    helpers.validate_page_id(page_id)
+    pages_info = {}
+    page_ids = list(page_ids)
 
-    query = 'SELECT title FROM pages WHERE id = ?;'
-    query_bindings = (page_id,)
-    self.sdow_cursor.execute(query, query_bindings)
+    for chunk_start in range(0, len(page_ids), PAGE_TITLES_CHUNK_SIZE):
+      chunk = page_ids[chunk_start:chunk_start + PAGE_TITLES_CHUNK_SIZE]
+      query = 'SELECT id, title FROM pages WHERE id IN ({0});'.format(
+          ','.join('?' * len(chunk)))
+      self.sdow_cursor.execute(query, chunk)
 
-    page_title = self.sdow_cursor.fetchone()
+      for page_id, sanitized_title in self.sdow_cursor.fetchall():
+        readable_title = helpers.get_readable_page_title(sanitized_title)
+        pages_info[page_id] = {
+            'title': readable_title,
+            'url': 'https://en.wikipedia.org/wiki/{0}'.format(
+                urllib.parse.quote(readable_title.replace(' ', '_'), safe="/:'()!,*~")),
+        }
 
-    if not page_title:
-      raise ValueError(
-          'Invalid page ID "{0}" provided. Page ID does not exist.'.format(page_id))
-
-    return page_title[0].replace('_', ' ')
+    return pages_info
 
   def compute_shortest_paths(self, source_page_id, target_page_id):
     """Returns a list of page IDs indicating the shortest path between the source and target pages.
+
+    Results are memoized in an in-process LRU cache; the graph database is immutable while
+    serving, so cached results never go stale within a process lifetime.
 
     Note: the provided page IDs must correspond to non-redirect pages, but that check is not made
     for performance reasons.
@@ -137,7 +170,19 @@ class Database(object):
     helpers.validate_page_id(source_page_id)
     helpers.validate_page_id(target_page_id)
 
-    return breadth_first_search(source_page_id, target_page_id, self)
+    cache_key = (source_page_id, target_page_id)
+    cached_paths = self._paths_cache.get(cache_key)
+    if cached_paths is not None:
+      self._paths_cache.move_to_end(cache_key)
+      return [list(path) for path in cached_paths]
+
+    paths = breadth_first_search(source_page_id, target_page_id, self)
+
+    self._paths_cache[cache_key] = tuple(tuple(path) for path in paths)
+    if len(self._paths_cache) > PATHS_CACHE_MAX_SIZE:
+      self._paths_cache.popitem(last=False)
+
+    return paths
 
   def fetch_outgoing_links_count(self, page_ids):
     """Returns the sum of outgoing links of the provided page IDs.
@@ -177,7 +222,8 @@ class Database(object):
         incoming_or_outgoing_links_count, page_ids)
     self.sdow_cursor.execute(query)
 
-    return self.sdow_cursor.fetchone()[0]
+    # SUM over zero rows is NULL; a page absent from the links table has zero links.
+    return self.sdow_cursor.fetchone()[0] or 0
 
   def fetch_outgoing_links(self, page_ids):
     """Returns a list of tuples of page IDs representing outgoing links from the list of provided

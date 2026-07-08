@@ -3,8 +3,8 @@ Shared pytest fixtures for the sdow backend test suite.
 
 Tests run against the small mock graph produced by scripts/create_mock_databases.py (the same
 database used for local `flask run` development, see .github/CONTRIBUTING.md) rather than a full
-Wikipedia dump. No network access is required or expected: the fixture below stubs out the live
-Wikipedia enrichment call so page-info lookups fall back to the mock database itself.
+Wikipedia dump. No network access is required or expected: page info is served entirely from the
+local pages table.
 """
 
 import os
@@ -46,14 +46,3 @@ def flask_app():
 @pytest.fixture()
 def client(flask_app):
   return flask_app.test_client()
-
-
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch):
-  """Stubs the live Wikipedia API call so the test suite never makes real network requests.
-
-  Simulating "API unreachable" also exercises the B5 fallback path (fetch_wikipedia_pages_info
-  falling back to titles already stored in the database) on every test that finds a path.
-  """
-  from sdow import helpers
-  monkeypatch.setattr(helpers, '_request_wikipedia_pages', lambda query_params: None)

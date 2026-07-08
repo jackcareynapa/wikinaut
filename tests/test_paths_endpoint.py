@@ -175,14 +175,56 @@ def test_insert_result_sqlite_failure_does_not_fail_the_search(client, flask_app
 
 
 # ---------------------------------------------------------------------------------------------
-# B5: Wikipedia API outage falls back to the database rather than failing the response.
+# Page info is served entirely from the local pages table — no live Wikipedia call in the
+# request path.
 # ---------------------------------------------------------------------------------------------
 
-def test_wikipedia_api_outage_falls_back_to_database_titles(client):
-  # no_network (conftest, autouse) already simulates the API being unreachable for every test;
-  # this test just makes the fallback assertion explicit and central.
+def test_pages_info_comes_from_local_database(client):
   response = client.post('/paths', json={'source': '7', 'target': '8'})
   assert response.status_code == 200
   body = response.get_json()
-  page = next(iter(body['pages'].values()))
-  assert 'title' in page and 'url' in page
+  assert len(body['pages']) == 2
+  for page in body['pages'].values():
+    assert 'title' in page and 'url' in page
+    assert page['url'].startswith('https://en.wikipedia.org/wiki/')
+
+
+# ---------------------------------------------------------------------------------------------
+# The in-process LRU result cache: a repeated identical query must not rerun the BFS.
+# ---------------------------------------------------------------------------------------------
+
+def test_repeated_search_is_served_from_cache(client, monkeypatch):
+  from sdow import database as database_module
+  from sdow import server
+
+  bfs_calls = []
+  real_bfs = database_module.breadth_first_search
+
+  def counting_bfs(source_page_id, target_page_id, database):
+    bfs_calls.append((source_page_id, target_page_id))
+    return real_bfs(source_page_id, target_page_id, database)
+
+  monkeypatch.setattr(database_module, 'breadth_first_search', counting_bfs)
+  # Evict any entry earlier tests left for this pair so the first request below really runs BFS.
+  server.database._paths_cache.clear()
+
+  first = client.post('/paths', json={'source': '5', 'target': '6'})
+  second = client.post('/paths', json={'source': '5', 'target': '6'})
+
+  assert first.status_code == 200 and second.status_code == 200
+  assert first.get_json()['paths'] == second.get_json()['paths']
+  assert len(bfs_calls) == 1
+
+
+def test_cached_result_is_not_aliased(client):
+  # Mutating one response's paths (list(list(int))) must not corrupt the cached copy.
+  from sdow import server
+
+  source_id = server.database.fetch_page('1')[0]
+  target_id = server.database.fetch_page('3')[0]
+
+  server.database._paths_cache.clear()
+  first = server.database.compute_shortest_paths(source_id, target_id)
+  first[0][0] = 999999
+  second = server.database.compute_shortest_paths(source_id, target_id)
+  assert second[0][0] == source_id

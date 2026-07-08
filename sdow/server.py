@@ -11,7 +11,7 @@ from flask_compress import Compress
 from flask import Flask, request, jsonify
 
 from sdow.database import Database
-from sdow.helpers import InvalidRequest, fetch_wikipedia_pages_info, is_str
+from sdow.helpers import InvalidRequest, is_str
 
 # Log a warning for any /paths query slower than this. Observability only — does not change
 # search behavior or cap query time; the BFS algorithm itself is untouched.
@@ -163,10 +163,12 @@ def shortest_paths_route():
     page_ids_set = set()
     for path in paths:
       for page_id in path:
-        page_ids_set.add(str(page_id))
+        page_ids_set.add(page_id)
 
     response['paths'] = paths
-    response['pages'] = fetch_wikipedia_pages_info(list(page_ids_set), database)
+    # Titles come straight from the local pages table — no live Wikipedia call in the request
+    # path. jsonify stringifies the integer keys, so the wire shape is unchanged.
+    response['pages'] = database.fetch_page_titles(page_ids_set)
 
 
   try:

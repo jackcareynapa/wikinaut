@@ -157,7 +157,7 @@ curl -X POST localhost:8085/paths -H 'content-type: application/json' -d '{"sour
   - `server.py` — Flask entry point
   - `database.py` — SQLite query wrapper
   - `breadth_first_search.py` — the bidirectional BFS
-  - `helpers.py` — Wikipedia API integration and error classes
+  - `helpers.py` — title sanitization, validation, and error classes
 - `sql/` — SQLite table schemas
 - `tests/` — backend pytest suite (runs against the mock graph, no network access needed)
 - `wikinaut.user.js` — the Tampermonkey userscript (frontend)
