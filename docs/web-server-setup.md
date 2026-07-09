@@ -178,6 +178,83 @@ clearing the `sleep infinity` override and booting gunicorn with both DBs presen
 fly deploy
 ```
 
+## Step 4b — Load the CSR link arrays (optional but strongly recommended)
+
+The server prefers serving BFS neighbor lookups from flat, memory-mapped **CSR arrays**
+(`/data/csr/*.npy`, ~1.3 GB for English Wikipedia) instead of the pipe-separated strings inside
+the 14 GB SQLite file: contiguous binary reads instead of disk-bound B-tree walks plus string
+parsing, and the OS page cache shares the arrays between both gunicorn workers. **This step is
+safe to skip or defer** — at boot, `CSRGraph.load('./csr')` returns `None` when the arrays are
+absent and the app logs one line and falls back to the SQLite links table. That also means the
+deploy order is safe: ship the code first, load the arrays whenever.
+
+**1. Build the arrays where the built graph lives** (the Step 1 VM, or any machine with the
+finished `wikinaut.sqlite` and numpy installed). Takes tens of minutes, dominated by parsing the
+pipe strings:
+
+```bash
+cd scripts/
+python3 build_csr_graph.py dump/wikinaut.sqlite dump/csr/
+```
+
+The build spot-checks 100 random pages against SQLite before declaring success; a mismatch raises
+instead of writing a corrupt artifact.
+
+**2. Stage the arrays:**
+
+```bash
+gsutil cp dump/csr/*.npy gs://wikinaut-dumps/csr/
+```
+
+**3. Download onto the volume.** Same pattern as Step 4 (open the bucket, resumable
+`python3`/`urllib` download over `fly ssh console`, lock the bucket back down) — but no rename
+this time; the five files keep their names under `/data/csr/`:
+
+```bash
+fly ssh console -a wikinaut-api
+# on the machine:
+python3 - <<'PY'
+import urllib.request, os, time
+FILES = ["csr_ids.npy", "csr_out_offsets.npy", "csr_out_edges.npy",
+         "csr_in_offsets.npy", "csr_in_edges.npy"]
+os.makedirs("/data/csr", exist_ok=True)
+for name in FILES:
+    url = f"https://storage.googleapis.com/wikinaut-dumps/csr/{name}"
+    dst = f"/data/csr/{name}.part"
+    TOTAL = int(urllib.request.urlopen(urllib.request.Request(url, method="HEAD")).headers["Content-Length"])
+    size = lambda: os.path.getsize(dst) if os.path.exists(dst) else 0
+    while size() < TOTAL:
+        try:
+            r = urllib.request.urlopen(urllib.request.Request(url, headers={"Range": f"bytes={size()}-"}), timeout=60)
+            with r, open(dst, "ab" if (size() == 0 or r.status == 206) else "wb") as f:
+                while (b := r.read(8388608)):
+                    f.write(b)
+        except Exception as e:
+            print(name, "retry:", e); time.sleep(2)
+    os.replace(dst, f"/data/csr/{name}")   # atomic: the app never sees a partial file
+    print("done:", name)
+PY
+exit
+```
+
+> The `.part` → final rename matters here too: the app treats the arrays as present as soon as
+> all five filenames exist, so a partial file under its final name would serve garbage edges.
+
+**4. Restart so the app picks the arrays up** (they're only probed at import):
+
+```bash
+fly apps restart wikinaut-api
+```
+
+Confirm in `fly logs` — you should see
+`Serving links from CSR arrays in ./csr (... pages, ... outgoing / ... incoming links).`
+instead of the fallback line. Then run the Step 5 checks.
+
+> **Rebuilds:** the CSR arrays are derived from `sdow.sqlite` — whenever you load a newer graph
+> (see "Updating / redeploying"), rebuild and reload the arrays from the *same* dump, or delete
+> `/data/csr/` and let the app fall back until you do. Serving mismatched arrays returns paths
+> from the older graph.
+
 ## Step 5 — Verify
 
 Run this after every deploy (initial load or a redeploy) — the three checks together confirm the
@@ -270,7 +347,9 @@ required to run the service.
 - **New Wikipedia graph:** build a fresh `wikinaut.sqlite` ([`data-source.md`](./data-source.md)),
   stage it (Step 2), load it onto the volume (Step 4, using the `sleep infinity` trick so you're not
   fighting the health check), then `fly deploy`. Because the app opens `sdow.sqlite`, do the atomic
-  rename only after the new file has fully transferred.
+  rename only after the new file has fully transferred. **Also rebuild and reload the CSR arrays
+  from the same dump (Step 4b)** — or delete `/data/csr/` so the app falls back to SQLite instead
+  of serving paths from the older graph.
 
 To validate the production image locally before deploying, use the container smoke test in
 [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).

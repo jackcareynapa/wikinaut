@@ -21,7 +21,7 @@ PAGE_TITLES_CHUNK_SIZE = 500
 class Database(object):
   """Wrapper for connecting to the SDOW database."""
 
-  def __init__(self, sdow_database, searches_database):
+  def __init__(self, sdow_database, searches_database, link_source=None):
     # Both files must exist before the app can serve — a missing one crash-loops every worker.
     # See docs/web-server-setup.md, Step 4 ("Database location & creation") for the recovery
     # runbook (how to keep a crash-looping machine alive to load the volume).
@@ -61,6 +61,10 @@ class Database(object):
     self.searches_cursor.execute('PRAGMA synchronous = NORMAL;')
 
     self._paths_cache = OrderedDict()
+
+    # BFS neighbor lookups go through link_source (e.g. a memory-mapped CSRGraph); when none is
+    # provided, this Database serves links itself from the SQLite links table.
+    self.link_source = link_source or self
 
   def fetch_page(self, page_title):
     """Returns the ID and title of the non-redirect page corresponding to the provided title,
@@ -176,7 +180,7 @@ class Database(object):
       self._paths_cache.move_to_end(cache_key)
       return [list(path) for path in cached_paths]
 
-    paths = breadth_first_search(source_page_id, target_page_id, self)
+    paths = breadth_first_search(source_page_id, target_page_id, self.link_source)
 
     self._paths_cache[cache_key] = tuple(tuple(path) for path in paths)
     if len(self._paths_cache) > PATHS_CACHE_MAX_SIZE:
@@ -257,13 +261,17 @@ class Database(object):
 
     Args:
       page_ids: A list of page IDs whose links to fetch.
-      outcoming_or_incoming_links: String which indicates whether to fetch outgoing ("source_id") or
-        incoming ("target_id") links.
+      outcoming_or_incoming_links: String which indicates whether to fetch outgoing
+        ("outgoing_links") or incoming ("incoming_links") links.
 
     Returns:
-      list(int, int): A cursor of a lists of integer tuples representing links from the list of
-        provided page IDs to other pages.
+      iterable(int, list(int)): Tuples of a page ID and its integer neighbor IDs. The
+        pipe-separated TEXT storage format is a detail of this SQLite adapter; CSRGraph serves
+        the same contract from flat arrays.
     """
+    # Snapshot the page IDs and run the query eagerly: the BFS passes a live dict-keys view and
+    # clears the dict before iterating the result. Only the string parsing is lazy.
+    #
     # Convert the page IDs into a string surrounded by parentheses for insertion into the query
     # below. The replace() bit is some hackery to handle Python printing a trailing ',' when there
     # is only one key.
@@ -273,8 +281,11 @@ class Database(object):
     query = 'SELECT id, {0} FROM links WHERE id IN {1};'.format(
         outcoming_or_incoming_links, page_ids)
     self.sdow_cursor.execute(query)
+    rows = self.sdow_cursor.fetchall()
 
-    return self.sdow_cursor
+    return (
+        (page_id, [int(token) for token in links_string.split('|') if token])
+        for page_id, links_string in rows)
 
   def insert_result(self, search):
     """Inserts a new search result into the searches table.

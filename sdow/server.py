@@ -10,6 +10,7 @@ from flask_cors import CORS
 from flask_compress import Compress
 from flask import Flask, request, jsonify
 
+from sdow.csr_graph import CSRGraph
 from sdow.database import Database
 from sdow.helpers import InvalidRequest, is_str
 
@@ -17,8 +18,15 @@ from sdow.helpers import InvalidRequest, is_str
 # search behavior or cap query time; the BFS algorithm itself is untouched.
 SLOW_QUERY_THRESHOLD_SECONDS = 2.0
 
-# Connect to the SDOW database.
-database = Database(sdow_database='./sdow.sqlite', searches_database='./searches.sqlite')
+# Without this, INFO-level messages (the CSR-vs-fallback line below, slow-query context, ...)
+# are silently dropped under gunicorn: Python's last-resort handler only emits WARNING+.
+logging.basicConfig(level=logging.INFO)
+
+# Connect to the SDOW database. BFS neighbor lookups prefer the memory-mapped CSR arrays
+# (./csr resolves to /data/csr under gunicorn's --chdir /data); when the arrays are absent,
+# CSRGraph.load returns None and the SQLite links table serves them instead.
+database = Database(sdow_database='./sdow.sqlite', searches_database='./searches.sqlite',
+                    link_source=CSRGraph.load('./csr'))
 
 # Initialize the Flask app.
 app = Flask(__name__)

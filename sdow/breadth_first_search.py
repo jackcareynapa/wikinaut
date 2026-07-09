@@ -40,7 +40,9 @@ def breadth_first_search(source_page_id, target_page_id, database):
   Args:
     source_page_id: The page at which to start the search.
     target_page_id: The page at which to end the search.
-    database: An Database instance which contains methods to query the Wikipedia database.
+    database: A link source (Database or CSRGraph) whose fetch_{outgoing,incoming}_links methods
+      yield (page_id, iterable of integer neighbor IDs) tuples and whose
+      fetch_{outgoing,incoming}_links_count methods return the summed link count.
 
   Returns:
     list(list(int)): A list of lists of page IDs corresponding to paths from the source page to the
@@ -78,8 +80,6 @@ def breadth_first_search(source_page_id, target_page_id, database):
       forward_depth += 1
 
       # Fetch the pages which can be reached from the currently unvisited forward pages.
-      # The replace() bit is some hackery to handle Python printing a trailing ',' when there is
-      # only one key.
       outgoing_links = database.fetch_outgoing_links(unvisited_forward.keys())
 
       # Mark all of the unvisited forward pages as visited.
@@ -90,18 +90,16 @@ def breadth_first_search(source_page_id, target_page_id, database):
       unvisited_forward.clear()
 
       for source_page_id, target_page_ids in outgoing_links:
-        for target_page_id in target_page_ids.split('|'):
-          if target_page_id:
-            target_page_id = int(target_page_id)
-            # If the target page is in neither visited forward nor unvisited forward, add it to
-            # unvisited forward.
-            if (target_page_id not in visited_forward) and (target_page_id not in unvisited_forward):
-              unvisited_forward[target_page_id] = [source_page_id]
+        for target_page_id in target_page_ids:
+          # If the target page is in neither visited forward nor unvisited forward, add it to
+          # unvisited forward.
+          if (target_page_id not in visited_forward) and (target_page_id not in unvisited_forward):
+            unvisited_forward[target_page_id] = [source_page_id]
 
-            # If the target page is in unvisited forward, add the source page as another one of its
-            # parents.
-            elif target_page_id in unvisited_forward:
-              unvisited_forward[target_page_id].append(source_page_id)
+          # If the target page is in unvisited forward, add the source page as another one of its
+          # parents.
+          elif target_page_id in unvisited_forward:
+            unvisited_forward[target_page_id].append(source_page_id)
 
     else:
       #---  BACKWARD BREADTH FIRST SEARCH  ---#
@@ -118,18 +116,16 @@ def breadth_first_search(source_page_id, target_page_id, database):
       unvisited_backward.clear()
 
       for target_page_id, source_page_ids in incoming_links:
-        for source_page_id in source_page_ids.split('|'):
-          if source_page_id:
-            source_page_id = int(source_page_id)
-            # If the source page is in neither visited backward nor unvisited backward, add it to
-            # unvisited backward.
-            if (source_page_id not in visited_backward) and (source_page_id not in unvisited_backward):
-              unvisited_backward[source_page_id] = [target_page_id]
+        for source_page_id in source_page_ids:
+          # If the source page is in neither visited backward nor unvisited backward, add it to
+          # unvisited backward.
+          if (source_page_id not in visited_backward) and (source_page_id not in unvisited_backward):
+            unvisited_backward[source_page_id] = [target_page_id]
 
-            # If the source page is in unvisited backward, add the target page as another one of its
-            # parents.
-            elif source_page_id in unvisited_backward:
-              unvisited_backward[source_page_id].append(target_page_id)
+          # If the source page is in unvisited backward, add the target page as another one of its
+          # parents.
+          elif source_page_id in unvisited_backward:
+            unvisited_backward[source_page_id].append(target_page_id)
 
     #---  CHECK FOR PATH COMPLETION  ---#
     # The search is complete if any of the pages are in both unvisited backward and unvisited, so

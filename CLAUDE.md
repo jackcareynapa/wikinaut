@@ -42,8 +42,9 @@ The repo is **flat** (not nested under `sdow/` like upstream):
 
 ```
 sdow/             Python package: server.py (Flask app), breadth_first_search.py (the algorithm),
-                  database.py, helpers.py
-scripts/          buildDatabase.sh + friends — download + process Wikipedia dumps into SQLite
+                  database.py, csr_graph.py (memory-mapped link arrays), helpers.py
+scripts/          buildDatabase.sh + friends — download + process Wikipedia dumps into SQLite;
+                  build_csr_graph.py (SQLite links → CSR arrays), benchmark_paths.py
 sql/              SQLite table schemas
 docs/             Documentation, including web-server-setup.md (Fly.io) and data-source.md (build)
 wikinaut.user.js  The Tampermonkey userscript (Wikinaut frontend)
@@ -81,12 +82,17 @@ preserve this join.
 - Language (Python vs. Rust) is **not** the speed lever. Most article pairs are 3–5
   hops apart and bidirectional search keeps both frontiers tiny, so per-query CPU is
   modest. The bottleneck is neighbor-lookup speed, i.e. graph representation.
-- Graph representation, slowest → fastest:
+- Graph representation, slowest → fastest (**both are implemented; CSR is preferred**):
   - sdow default: adjacency as pipe-separated ID strings in SQLite (low memory, disk-bound).
-  - Faster: in-memory **CSR** (compressed sparse row) — one flat `uint32` array of all
-    neighbors + an offset array indexed by page ID; neighbor lookup is an array slice.
-    Doable in pure Python with numpy memory-mapped arrays. ~5–8 GB RAM for English
-    Wikipedia (~6M pages, ~150M links).
+    This is the fallback when the CSR arrays are absent.
+  - **CSR** (compressed sparse row) — flat `uint32` neighbor arrays + `int64` offset arrays,
+    built by `scripts/build_csr_graph.py` and served by `sdow/csr_graph.py` via numpy
+    `mmap_mode='r'` (page-cache-shared across workers, ~1.3 GB on disk for English Wikipedia,
+    near-zero RSS). `server.py` wires it in as `Database(..., link_source=CSRGraph.load('./csr'))`;
+    SQLite still serves pages/redirects/title resolution. `scripts/create_mock_databases.py`
+    builds mock CSR arrays too, so local dev and tests run the same path as production.
+    Deploying the arrays to Fly is Step 4b in `docs/web-server-setup.md`; rebuild them whenever
+    the graph dump is replaced (they're derived data).
 - **Optimization for a fixed target:** if the destination is usually the same, skip
   per-query bidirectional BFS. Run one BFS from the target over the *reversed* graph,
   store parent pointers, and every walk becomes O(path length) — basically instant.
@@ -131,12 +137,29 @@ article. Three things to handle:
 - Call the backend with **`GM_xmlhttpRequest`**, not `fetch`. A plain `fetch` from a
   `wikipedia.org` page to your backend hits the CORS wall. `GM_xmlhttpRequest` plus the
   `// @connect` directives in the userscript header avoids it. The script defaults to the
-  hosted Fly backend and reads a self-host override from GM storage (Settings → Backend URL).
+  hosted Fly backend with a self-host override in Settings → Backend URL.
+- **All player settings persist via GM storage** (`GM_getValue`/`GM_setValue`): the Backend
+  URL override, plus flight speed and ship/trail colors (`wikinautSettings:v1` JSON blob).
+  `sessionStorage` is only the no-GM fallback and a one-time migration source — don't move
+  settings back there. In-flight route state (`wikinautState:v1`) intentionally stays in
+  `sessionStorage`: it must survive same-tab navigation but not outlive the tab.
 - The "flying through space" animation is pure cosmetics (the `Figure`/ship, `Trail` canvas,
   `Transition` hyperspace overlay, CSS). It carries none of the hard logic — keep that layer
   separate from the engine (`Routing`, `Titles`, `Storage`, `Links`, `Traversal`). Internal
   identifiers in the script keep their original names (e.g. `Figure`, `House`, `walkTo`) even
   though the theme is now a spacecraft — they're invisible to the player.
+- **The cruise is document-space.** `Traversal.cruiseToLink` plans one cubic Bézier per hop in
+  document coordinates; the page scroll is the camera (time-based lock plus a hard frame guard
+  so the ship can never leave the viewport). The flight-speed setting is always honored —
+  `CONFIG.maxCruiseDurationMs` is a safety net for pathological hops, **not a pacing knob**;
+  lowering it silently overrides the player's speed slider on long flights.
+- **CSS custom properties don't reach body-mounted layers.** During a journey `JourneyPortal`
+  moves `#wikinaut-ship-shell` and `#wikinaut-jump-layer` onto `document.body` — outside
+  `#wikinaut-root`. A `var()` consumed there with no declaration on the layer itself is
+  invalid at computed-value time, which turns an SVG `fill` **black** (this was the
+  "gray flame" bug) and silently activates every `var(…, fallback)`. Declare the `--wn-*`
+  palette on all three hosts (`#wikinaut-root, #wikinaut-ship-shell, #wikinaut-jump-layer`)
+  and set dynamic values on each host too (`Settings.applyToDom` does).
 - Userscript runs on `en.wikipedia.org`; keep the `@match` scoped to article pages.
 
 ## Working in this repo — guidance for assistants
@@ -150,6 +173,16 @@ article. Three things to handle:
 - **Frontend changes** are in `wikinaut.user.js`. The high-value, high-difficulty code is
   the DOM link-matching (`Links`) and navigation (`Traversal`/`Transition`), not the
   pathfinding.
+- **Verifying frontend changes:** there is no checked-in test suite for the userscript —
+  `node --check` only catches syntax. Real verification means driving the actual script with
+  a throwaway Playwright harness against live `en.wikipedia.org`: shim `GM_*` (mock the
+  `/paths` backend) via `addInitScript`, inject the script body with `page.evaluate` (bypasses
+  Wikipedia's CSP, unlike `addScriptTag`), then assert on real flights — landings, statuses,
+  storage, screenshots. Several bugs (Parsoid hrefs, phantom navbox rects, the black flame)
+  were only findable this way; don't sign off frontend work on static reading alone.
+- Keep the **FX/engine boundary** mechanically clean: `Figure`/`Trail`/`Transition`/
+  `LaunchSequence`/`LinkFx` must never call `Phase.set`, `setStatus`, `Storage.save/clear`,
+  or `link.click()` — grep for these in FX modules before finishing any frontend change.
 - Stay in **Python** for backend work (project owner's primary language); don't
   propose a Rust rewrite as a "speedup" — see algorithm notes for why it isn't one.
 
@@ -159,7 +192,7 @@ article. Three things to handle:
 # Backend: set up environment (from repo root)
 virtualenv env && source env/bin/activate && pip install -r requirements.txt
 
-# Create a small mock graph for local dev (no full dump needed)
+# Create a small mock graph for local dev (no full dump needed; also builds sdow/csr/ arrays)
 python scripts/create_mock_databases.py
 
 # Run the API server locally (from sdow/, which holds the mock sdow.sqlite/searches.sqlite)
@@ -168,9 +201,15 @@ cd sdow/ && export FLASK_APP=server.py FLASK_DEBUG=1 && flask run
 # Build the full graph from a Wikipedia dump (hours; does the linktarget join)
 cd scripts/ && ./buildDatabase.sh <YYYYMMDD>
 
-# Build + run the backend container locally against the mock DB
+# Build the CSR link arrays from a built graph (tens of minutes for the full dump)
+python scripts/build_csr_graph.py <sdow.sqlite> <out_dir>
+
+# Benchmark SQLite-vs-CSR search latency on a synthetic graph
+python scripts/benchmark_paths.py
+
+# Build + run the backend container locally against the mock DB (+ CSR arrays)
 docker build -t wikinaut-api . && \
-  mkdir -p /tmp/wn && cp sdow/*.sqlite /tmp/wn/ && \
+  mkdir -p /tmp/wn/csr && cp sdow/*.sqlite /tmp/wn/ && cp sdow/csr/*.npy /tmp/wn/csr/ && \
   docker run --rm -p 8085:8080 -v /tmp/wn:/data wikinaut-api   # then curl localhost:8085/ok
 
 # Lint the userscript

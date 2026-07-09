@@ -1,6 +1,11 @@
 import os
 import sqlite3
+import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from build_csr_graph import build_csr  # noqa: E402
 
 cwd = os.path.dirname(__file__)
 mock_sdow_database_filename = os.path.join(cwd, '../sdow/sdow.sqlite')
@@ -126,8 +131,14 @@ for page_id, outgoing_links in forward_links:
       prod_page_ids[page_id], outgoing_links_count, incoming_links_count, outgoing_links, incoming_links))
 
 conn.commit()
+conn.close()
 
 print('[INFO] Successfully created mock SDOW database: {0}'.format(mock_sdow_database_filename))
+
+# Build the CSR link arrays beside the mock database so local dev and tests exercise the same
+# CSR-backed search path as production (sdow/server.py loads ./csr relative to sdow/).
+mock_csr_directory = os.path.join(cwd, '../sdow/csr')
+build_csr(mock_sdow_database_filename, mock_csr_directory)
 
 
 print('[INFO] Creating mock searches database: {0}'.format(mock_searches_database_filename))
