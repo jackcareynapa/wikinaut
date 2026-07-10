@@ -40,6 +40,12 @@
     backendUrlKey: 'wikinaut:backendUrl',
     routeStorageKey: 'wikinautState:v1',
     settingsStorageKey: 'wikinautSettings:v1',
+    routesCacheKey: 'wikinaut:routes:v1',
+    aliasCacheKey: 'wikinaut:aliases:v1',
+    routesCacheTtlMs: 15 * 60 * 1000,  // charted routes go stale gracefully — the graph is a
+                                       // monthly dump, but a short TTL keeps re-charts honest
+    routesCacheMax: 20,
+    aliasCacheMax: 40,
     figureSize: 56,
     minWalkDurationMs: 620,
     maxCruiseDurationMs: 12000, // safety net for pathological hops only, NOT a pacing knob —
@@ -100,9 +106,12 @@
   };
 
   // ─── CSS ────────────────────────────────────────────────────────────────────
+  // No web-font @import here: a CSS @import inside injected styles blocks rendering of the
+  // whole page on the font CDN. The font stacks below name Orbitron/Rajdhani first (used when
+  // locally installed) and fall through to system faces otherwise; if a display font ever
+  // becomes part of the design, load it via a non-blocking <link rel="stylesheet"> with
+  // font-display: swap — never @import.
   const CSS = `
-    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;500;600&display=swap');
-
     #wikinaut-root,
     #wikinaut-root * {
       box-sizing: border-box;
@@ -1228,30 +1237,26 @@
   // ─── Backend URL (default + self-host override via GM storage) ────────────────
 
   const Backend = {
-    get url() {
-      let stored = '';
+    // The stored override, trimmed ('' when unset or storage is unreadable) — the single
+    // reader both getters share.
+    _stored() {
       try {
-        stored =
+        const value =
           typeof GM_getValue === 'function'
             ? GM_getValue(CONFIG.backendUrlKey, '')
             : localStorage.getItem(CONFIG.backendUrlKey) || '';
-      } catch {
-        stored = '';
-      }
-      stored = String(stored || '').trim().replace(/\/+$/, '');
-      return stored || CONFIG.apiBaseUrl;
-    },
-
-    get override() {
-      try {
-        const v =
-          typeof GM_getValue === 'function'
-            ? GM_getValue(CONFIG.backendUrlKey, '')
-            : localStorage.getItem(CONFIG.backendUrlKey) || '';
-        return String(v || '').trim();
+        return String(value || '').trim();
       } catch {
         return '';
       }
+    },
+
+    get url() {
+      return Backend._stored().replace(/\/+$/, '') || CONFIG.apiBaseUrl;
+    },
+
+    get override() {
+      return Backend._stored();
     },
 
     set(url) {
@@ -1644,6 +1649,11 @@
 
   function bindEvents() {
     dom.input.addEventListener('input', onDestinationInput);
+    // Warm the backend the moment the player shows intent: a Fly machine that idled to sleep
+    // otherwise pays its wake-up inside the charting wait. Fire-and-forget, once per page.
+    dom.input.addEventListener('focus', () => {
+      requestText(`${Backend.url}/ok`).catch(() => {});
+    }, {once: true});
     dom.input.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
@@ -1751,6 +1761,11 @@
 
   // ─── Autocomplete ───────────────────────────────────────────────────────────
 
+  // Query → suggestion list for this page's lifetime. Retyping/backspacing replays earlier
+  // queries constantly; a hit renders instantly and skips both the debounce and the API call.
+  const autocompleteCache = new Map();
+  const AUTOCOMPLETE_CACHE_MAX = 80;
+
   function onDestinationInput() {
     // Editing abandons any locked destination and charted course (strict gating).
     runtime.selectedPage = null;
@@ -1765,6 +1780,15 @@
     const query = dom.input.value.trim();
     if (query.length < 2) {
       closeSuggestions();
+      return;
+    }
+
+    const cached = autocompleteCache.get(query);
+    if (cached) {
+      // Invalidate any in-flight fetch for an older query so its late response can't
+      // overwrite these fresher (cached) suggestions.
+      runtime.autocompleteAbortId += 1;
+      renderSuggestions(cached);
       return;
     }
 
@@ -1804,6 +1828,10 @@
     const requestId = ++runtime.autocompleteAbortId;
     try {
       const results = await Routing.autocomplete(query);
+      autocompleteCache.set(query, results);
+      if (autocompleteCache.size > AUTOCOMPLETE_CACHE_MAX) {
+        autocompleteCache.delete(autocompleteCache.keys().next().value);
+      }
       if (requestId !== runtime.autocompleteAbortId) return;
       renderSuggestions(results);
     } catch (err) {
@@ -1883,14 +1911,7 @@
       runtime.routes = routes;
       runtime.routeIndex = 0;
       runtime.route = route;
-      Storage.save({
-        active: false,
-        currentIndex: 0,
-        route,
-        routes,
-        routeIndex: 0,
-        targetTitle: route[route.length - 1],
-      });
+      Storage.saveRoute(route, {routes, routeIndex: 0});
       renderRoute(route, 0, 1, alternateRoutes(), runtime.routeIndex);
       updateRouteCycle();
       const hops = route.length - 1;
@@ -1944,14 +1965,7 @@
     const n = runtime.routes.length;
     runtime.routeIndex = (runtime.routeIndex + delta + n) % n;
     runtime.route = runtime.routes[runtime.routeIndex];
-    Storage.save({
-      active: false,
-      currentIndex: 0,
-      route: runtime.route,
-      routes: runtime.routes,
-      routeIndex: runtime.routeIndex,
-      targetTitle: runtime.route[runtime.route.length - 1],
-    });
+    Storage.saveRoute(runtime.route, {routes: runtime.routes, routeIndex: runtime.routeIndex});
     renderRoute(runtime.route, 0, 1, alternateRoutes(), runtime.routeIndex);
     updateRouteCycle();
   }
@@ -2090,12 +2104,7 @@
       return;
     }
 
-    Storage.save({
-      active: true,
-      currentIndex,
-      route,
-      targetTitle: route[route.length - 1],
-    });
+    Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
 
     // The launch sequence (countdown + gantry + lift-off) plays only here, on the origin
@@ -2120,7 +2129,15 @@
     // The backend returns ALL equally-short paths for a query (that's what powers the
     // route-selection feature — no extra backend work). Map every one to a title route,
     // de-dupe, and cap at CONFIG.maxRoutes for star-map legibility.
+    // Successful charts are cached in sessionStorage (short TTL) so re-charting the same
+    // pair — retries, backtracking, route-pager exploration across reloads — is instant.
     async fetchRoutes(sourceTitle, targetTitle) {
+      const cacheId =
+        `${Titles.canonical(sourceTitle)}${Titles.canonical(targetTitle)}`;
+      const cached =
+        SessionCache.get(CONFIG.routesCacheKey, cacheId, CONFIG.routesCacheTtlMs);
+      if (cached) return cached.map((route) => [...route]);
+
       let data;
       try {
         data = await requestJson(`${Backend.url}/paths`, {
@@ -2167,6 +2184,7 @@
           {code: 'wn/route-none'});
       }
 
+      SessionCache.put(CONFIG.routesCacheKey, cacheId, routes, CONFIG.routesCacheMax);
       return routes;
     },
 
@@ -2209,7 +2227,12 @@
     // linking via a redirect alias (e.g. route step "New York City" but the on-page anchor is
     // literally "NYC"). Best-effort: any failure just means Links falls back to exact-title
     // matching (and ultimately the URL-jump fallback) — this never blocks the flight.
+    // Alias sets are session-cached; only successful lookups are stored, so a transient API
+    // failure is retried on the next hop that needs it.
     async fetchRedirectAliases(title) {
+      const cacheId = Titles.canonical(title);
+      const cached = SessionCache.get(CONFIG.aliasCacheKey, cacheId);
+      if (cached !== undefined) return cached;
       try {
         const params = new URLSearchParams({
           action: 'query',
@@ -2221,7 +2244,9 @@
         });
         const data = await requestJson(`${CONFIG.wikipediaApiUrl}?${params.toString()}`);
         const pages = data?.query?.backlinks;
-        return Array.isArray(pages) ? pages.map((p) => p.title).filter(Boolean) : [];
+        const aliases = Array.isArray(pages) ? pages.map((p) => p.title).filter(Boolean) : [];
+        SessionCache.put(CONFIG.aliasCacheKey, cacheId, aliases, CONFIG.aliasCacheMax);
+        return aliases;
       } catch (err) {
         console.warn('[Wikinaut] wn/redirect-lookup-failed', title, err);
         return [];
@@ -2328,12 +2353,62 @@
       }
     },
 
+    // The one serializer for route state: every call site describes only what differs
+    // (active/currentIndex/routes/routeIndex/entry) and targetTitle is always derived from
+    // the route, so the shape can't drift between writers.
+    saveRoute(route, extras = {}) {
+      return Storage.save({
+        active: false,
+        currentIndex: 0,
+        route,
+        targetTitle: route[route.length - 1] ?? '',
+        ...extras,
+      });
+    },
+
     clear() {
       try {
         sessionStorage.removeItem(CONFIG.routeStorageKey);
       } catch (error) {
         console.warn('[Wikinaut] wn/storage-write-failed', error);
       }
+    },
+  };
+
+  // ─── Session caches (latency only) ─────────────────────────────────────────────
+  // Tiny sessionStorage-backed caches with insertion-order eviction, shared by the /paths
+  // route cache and the redirect-alias cache. Pure latency optimizations: any storage failure
+  // or miss just means a refetch, never an error. Session-scoped on purpose — route answers
+  // and alias sets don't need to outlive the tab.
+  const SessionCache = {
+    _read(key) {
+      try {
+        const raw = sessionStorage.getItem(key);
+        const entries = raw ? JSON.parse(raw) : [];
+        return Array.isArray(entries) ? entries : [];
+      } catch {
+        return [];
+      }
+    },
+
+    _write(key, entries) {
+      try {
+        sessionStorage.setItem(key, JSON.stringify(entries));
+      } catch {}
+    },
+
+    get(key, id, maxAgeMs = 0) {
+      const hit = SessionCache._read(key).find((entry) => entry.id === id);
+      if (!hit) return undefined;
+      if (maxAgeMs && Date.now() - hit.t > maxAgeMs) return undefined;
+      return hit.v;
+    },
+
+    put(key, id, value, cap) {
+      const entries = SessionCache._read(key).filter((entry) => entry.id !== id);
+      entries.push({id, t: Date.now(), v: value});
+      while (entries.length > cap) entries.shift();
+      SessionCache._write(key, entries);
     },
   };
 
@@ -2664,12 +2739,7 @@
         // in the same screen spot they left from. Consume the entry once used.
         if (state.entry) {
           await Transition.arrive(state.entry);
-          Storage.save({
-            active: true,
-            currentIndex,
-            route: state.route,
-            targetTitle: state.route[state.route.length - 1],
-          });
+          Storage.saveRoute(state.route, {active: true, currentIndex});
         }
 
         if (currentIndex >= state.route.length - 1) {
@@ -2679,21 +2749,7 @@
 
         const nextTitle = state.route[currentIndex + 1];
         setStatus(`Scanning for ${nextTitle}…`);
-        // Titles that redirect to nextTitle — so a live page linking via a redirect alias
-        // (route step "New York City" but the on-page anchor is literally "NYC") still
-        // matches. Best-effort; an empty list just falls back to exact-title matching.
-        const aliases = await Routing.fetchRedirectAliases(nextTitle);
-        let link = Links.locate(nextTitle, aliases);
-
-        if (!link) {
-          // The link may be tucked inside a collapsed navbox / dropdown / <details>. Open
-          // any container hiding it and try again before falling back to a URL jump.
-          const revealed = Links.reveal(nextTitle, aliases);
-          if (revealed) {
-            setStatus(`Uncovering the route to ${nextTitle}…`);
-            link = Links.locate(nextTitle, aliases) || revealed;
-          }
-        }
+        const {link, aliases, candidateCount} = await Traversal._locateNextLink(nextTitle);
 
         if (!link) {
           // The DOM scan still couldn't surface the link (a redirect alias the title text
@@ -2705,7 +2761,7 @@
           // no anchor matched the title at all (a matching gap), >0 means match-but-unusable.
           console.warn('[Wikinaut] wn/link-missing', {
             title: nextTitle,
-            candidateCount: Links.candidates(nextTitle, aliases).length,
+            candidateCount,
             aliasCount: aliases.length,
             revealTried: true,
           });
@@ -2729,45 +2785,13 @@
         setStatus(`Target acquired: ${nextTitle}. Charging jump drive.`);
         await Traversal.walkToLink(link);
 
-        // tearThrough is pure FX; the engine (here) owns navigation + persistence. Wrap it in
-        // a watchdog so a throttled background tab or a rejected animation promise can never
-        // stall the actual jump — the transition just gets skipped straight to its end state.
-        let anchor;
-        try {
-          const watchdogMs = CONFIG.jumpDurationMs + 1000;
-          anchor = await Promise.race([
-            Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
-            sleep(watchdogMs).then(() => null),
-          ]);
-        } catch (transitionError) {
-          console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
-          anchor = null;
-        }
-        if (!anchor) {
-          anchor = Transition.anchorFromLink(link, link.getBoundingClientRect());
-        }
-
-        Storage.save({
-          active: true,
-          currentIndex: currentIndex + 1,
-          route: state.route,
-          targetTitle: state.route[state.route.length - 1],
-          entry: {
-            x: anchor.slitX - CONFIG.figureSize / 2,
-            y: anchor.slitY - CONFIG.figureSize / 2,
-            angle: runtime.figureAngle,
-          },
-        });
-        link.click();
+        await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
-        Storage.save({
-          active: false,
+        Storage.saveRoute(state?.route ?? [], {
           currentIndex: Number.isInteger(state?.currentIndex) ? state.currentIndex : 0,
-          route: state?.route ?? [],
-          targetTitle: state?.route?.[state.route.length - 1] ?? '',
         });
         Phase.set(PHASES.STALLED);
         dom.beginButton.disabled = false;
@@ -2778,6 +2802,71 @@
         if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
         runtime.isWalking = false;
       }
+    },
+
+    // Find the on-page anchor for the next hop with the network OFF the critical path: most
+    // hops match the route title directly, so scan for it first with zero requests. Only on a
+    // miss pull the redirect aliases (session-cached — see Routing.fetchRedirectAliases) and
+    // rescan, then finally try revealing a collapsed container. Returns the scanned candidate
+    // count so the caller's link-missing diagnostics don't pay a second full-page scan.
+    async _locateNextLink(nextTitle) {
+      let aliases = [];
+      let candidates = Links.candidates(nextTitle);
+      let link = Links.pickFrom(candidates);
+
+      if (!link) {
+        // A live page may link via a redirect alias (route step "New York City", on-page
+        // anchor literally "NYC"). Best-effort; an empty list just means no extra matches.
+        aliases = await Routing.fetchRedirectAliases(nextTitle);
+        if (aliases.length) {
+          candidates = Links.candidates(nextTitle, aliases);
+          link = Links.pickFrom(candidates);
+        }
+      }
+
+      if (!link) {
+        // The link may be tucked inside a collapsed navbox / dropdown / <details>. Open
+        // any container hiding it and try again before falling back to a URL jump.
+        const revealed = Links.reveal(nextTitle, aliases);
+        if (revealed) {
+          setStatus(`Uncovering the route to ${nextTitle}…`);
+          link = Links.locate(nextTitle, aliases) || revealed;
+        }
+      }
+
+      return {link, aliases, candidateCount: candidates.length};
+    },
+
+    // The engine side of a jump: play the hyperspace FX (watchdogged), persist the advanced
+    // route + warp-entry point, and click through. tearThrough is pure FX; navigation and
+    // persistence live here so a stalled/rejected animation can never block the actual jump —
+    // the transition just gets skipped straight to its end state.
+    async _jumpThrough(link, nextTitle, currentIndex, route) {
+      let anchor;
+      try {
+        const watchdogMs = CONFIG.jumpDurationMs + 1000;
+        anchor = await Promise.race([
+          Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
+          sleep(watchdogMs).then(() => null),
+        ]);
+      } catch (transitionError) {
+        console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
+        anchor = null;
+      }
+      if (!anchor) {
+        anchor = Transition.anchorFromLink(link, link.getBoundingClientRect());
+      }
+
+      Storage.saveRoute(route, {
+        active: true,
+        currentIndex: currentIndex + 1,
+        entry: {
+          x: anchor.slitX - CONFIG.figureSize / 2,
+          y: anchor.slitY - CONFIG.figureSize / 2,
+          angle: runtime.figureAngle,
+        },
+      });
+      link.click();
     },
 
     // The live page redirected/diverged off the plotted route (either a genuine drift, or the
@@ -2919,11 +3008,9 @@
     // in the same spot), play a degraded "emergency warp" flourish, and navigate straight
     // to the canonical article.
     async jumpByUrl(nextTitle, nextIndex, route) {
-      Storage.save({
+      Storage.saveRoute(route, {
         active: true,
         currentIndex: nextIndex,
-        route,
-        targetTitle: route[route.length - 1],
         entry: Traversal.shipEntry(),
       });
 
@@ -2981,7 +3068,12 @@
     // `aliases` (optional) is a list of titles known to redirect to `title` — see
     // Routing.fetchRedirectAliases — so a live page linking via a redirect alias still matches.
     locate(title, aliases = []) {
-      const candidates = Links.candidates(title, aliases);
+      return Links.pickFrom(Links.candidates(title, aliases));
+    },
+
+    // Choose the anchor the ship should fly to from an already-scanned candidate list —
+    // callers that need the candidate list anyway (for diagnostics) scan once and pick here.
+    pickFrom(candidates) {
       if (!candidates.length) return null;
 
       const best = Links.bestVisible(candidates);
