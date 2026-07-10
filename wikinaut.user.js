@@ -325,8 +325,16 @@
         radial-gradient(1px 1px at 88% 25%, rgba(255,255,255,0.4), transparent),
         linear-gradient(180deg, rgba(3,8,18,0.7), rgba(3,8,18,0.95));
       background-size: 200px 100px, 240px 120px, 180px 90px, 220px 110px, 100% 100%;
-      animation: wikinaut-drift 60s linear infinite;
       overflow: hidden;
+    }
+
+    /* The star-field drift (and the current-waypoint pulse below) run ONLY while a course is
+       actually in play — an idle console on every article page must schedule zero animation
+       work (the drift alone kept a compositor layer repainting forever). */
+    #wikinaut-panel:is([data-phase="plotting"], [data-phase="course-ready"],
+        [data-phase="countdown"], [data-phase="launching"], [data-phase="flying"],
+        [data-phase="arrived"]) #wikinaut-route-card {
+      animation: wikinaut-drift 60s linear infinite;
     }
 
     @keyframes wikinaut-drift {
@@ -483,7 +491,12 @@
       font-size: 9px;
       letter-spacing: 0.2px;
     }
-    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-cyan); animation: wikinaut-wp-pulse 1.8s ease-in-out infinite; }
+    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-cyan); }
+    #wikinaut-panel:is([data-phase="plotting"], [data-phase="course-ready"],
+        [data-phase="countdown"], [data-phase="launching"], [data-phase="flying"],
+        [data-phase="arrived"]) .wikinaut-wp.current .wikinaut-wp-node {
+      animation: wikinaut-wp-pulse 1.8s ease-in-out infinite;
+    }
     .wikinaut-wp.current .wikinaut-wp-core { fill: var(--wn-cyan); }
     @keyframes wikinaut-wp-pulse {
       0%,100% { filter: drop-shadow(0 0 4px rgba(0,243,255,0.5)); }
@@ -737,6 +750,10 @@
       will-change: transform;
     }
     #wikinaut-ship-shell[data-visible="true"] { opacity: 1; }
+    /* The hidden ship is opacity:0 (kept in layout for position continuity), so without this
+       its pose keyframes (hover, core pulse, flame flicker) run invisibly on every article
+       forever. An idle page must schedule zero animation work. */
+    #wikinaut-ship-shell[data-visible="false"] * { animation: none !important; }
     /* Soft engine aura so the craft reads against dense article text. */
     #wikinaut-ship-shell::before {
       content: '';
@@ -1178,7 +1195,8 @@
       .wikinaut-reveal-pulse,
       #wikinaut-panel[data-phase="plotting"],
       #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button,
-      #wikinaut-route-card {
+      #wikinaut-route-card,
+      .wikinaut-wp-node {
         animation: none !important;
       }
       #wikinaut-route-card { background-position: 0 0; }
@@ -1340,14 +1358,60 @@
 
   // ─── Trail canvas (cyan → purple particle wake) ───────────────────────────────
 
+  // ─── FxLoop (single rAF owner) ────────────────────────────────────────────────
+  // One requestAnimationFrame chain drives every per-frame consumer (the Trail canvas and
+  // animate()'s tweens) instead of each running its own competing loop. Subscribers are
+  // called with the frame timestamp and unsubscribe by returning false; the chain parks
+  // itself when the last subscriber leaves, so idle pages schedule zero frames.
+  const FxLoop = {
+    _subs: new Set(),
+    _rafId: null,
+    _ticking: false,
+
+    add(fn) {
+      FxLoop._subs.add(fn);
+      // No scheduling mid-tick: a subscriber added from inside a frame callback (the cruise
+      // feeds Trail.addPoint every frame) is picked up by the end-of-tick reschedule —
+      // scheduling here too would stack extra rAF chains, exactly what this loop exists to
+      // prevent.
+      if (!FxLoop._rafId && !FxLoop._ticking) {
+        FxLoop._rafId = requestAnimationFrame(FxLoop._tick);
+      }
+    },
+
+    remove(fn) {
+      FxLoop._subs.delete(fn);
+    },
+
+    _tick(now) {
+      FxLoop._rafId = null;
+      FxLoop._ticking = true;
+      for (const fn of [...FxLoop._subs]) {
+        try {
+          if (fn(now) === false) FxLoop._subs.delete(fn);
+        } catch (error) {
+          // A throwing subscriber is dropped rather than allowed to kill the shared loop.
+          FxLoop._subs.delete(fn);
+          console.warn('[Wikinaut] wn/fx-frame-failed', error);
+        }
+      }
+      FxLoop._ticking = false;
+      if (FxLoop._subs.size) FxLoop._rafId = requestAnimationFrame(FxLoop._tick);
+    },
+  };
+
   const Trail = {
     canvas: null,
     ctx: null,
     points: [],
     sparks: [],
-    _rafId: null,
     _lastPointTime: 0,
     _dpr: 1,
+    // Draw-time caches, rebuilt only when the player's colors change (never per frame):
+    // the 48-bucket wake color ramp and the prerendered nozzle-flare sprite.
+    _paletteKey: '',
+    _rampBuckets: null,
+    _flareSprite: null,
 
     init() {
       const canvas = document.createElement('canvas');
@@ -1368,6 +1432,7 @@
       canvas.height = Math.round(window.innerHeight * dpr);
       canvas.style.width = `${window.innerWidth}px`;
       canvas.style.height = `${window.innerHeight}px`;
+      Trail._paletteKey = '';   // the flare sprite bakes in the dpr — rebuild on change
     },
 
     // Points and sparks live in DOCUMENT coordinates (callers pass viewport positions; scroll
@@ -1393,7 +1458,7 @@
       }
       if (Trail.points.length > 140) Trail.points.shift();
       if (Trail.sparks.length > 70) Trail.sparks.shift();
-      if (!Trail._rafId) Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
+      FxLoop.add(Trail._draw);
     },
 
     // Radial shower of embers from a point (viewport coords in, doc coords stored) — used for
@@ -1414,34 +1479,82 @@
         });
       }
       if (Trail.sparks.length > 90) Trail.sparks.splice(0, Trail.sparks.length - 90);
-      if (!Trail._rafId) Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
+      FxLoop.add(Trail._draw);
     },
 
-    _draw() {
-      const ctx = Trail.ctx;
-      if (!ctx) return;
-      const now = performance.now();
-      const fadeMs = CONFIG.trailFadeMs;
-
-      ctx.setTransform(Trail._dpr, 0, 0, Trail._dpr, 0, 0);
-      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-      Trail.points = Trail.points.filter((p) => now - p.t < fadeMs);
-      Trail.sparks = Trail.sparks.filter((s) => now - s.t < s.life);
+    // Rebuilds the wake color ramp (48 pre-mixed {r,g,b} buckets: white-hot core → ship color →
+    // trail color) and the prerendered nozzle-flare sprite. Cheap and idempotent — _draw calls
+    // it every frame and it no-ops unless the player's colors actually changed.
+    _refreshPalette() {
+      const midHex = Settings.get('travelerColor') || PALETTE.cyan;
+      const tailHex = Settings.get('trailColor') || PALETTE.purple;
+      const key = `${midHex}|${tailHex}`;
+      if (key === Trail._paletteKey && Trail._rampBuckets) return;
+      Trail._paletteKey = key;
 
       const core = hexToRgb(PALETTE.cyanGlow); // hottest, at the nozzle
-      const mid = hexToRgb(Settings.get('travelerColor') || PALETTE.cyan);
-      const tail = hexToRgb(Settings.get('trailColor') || PALETTE.purple);
+      const mid = hexToRgb(midHex);
+      const tail = hexToRgb(tailHex);
       const mix = (c1, c2, t) => ({
         r: Math.round(lerp(c1.r, c2.r, t)),
         g: Math.round(lerp(c1.g, c2.g, t)),
         b: Math.round(lerp(c1.b, c2.b, t)),
       });
-      // Wake colour ramp: white-hot core → cyan body → cool tail.
-      const ramp = (age) => (age < 0.5 ? mix(core, mid, age / 0.5) : mix(mid, tail, (age - 0.5) / 0.5));
+      const buckets = [];
+      for (let i = 0; i < 48; i += 1) {
+        const age = i / 47;
+        buckets.push(age < 0.5 ? mix(core, mid, age / 0.5) : mix(mid, tail, (age - 0.5) / 0.5));
+      }
+      Trail._rampBuckets = buckets;
 
+      // Nozzle flare, drawn once into an offscreen sprite (36×36 CSS px at device resolution)
+      // instead of a createRadialGradient per frame.
+      const dpr = Trail._dpr || 1;
+      const sprite = document.createElement('canvas');
+      sprite.width = sprite.height = Math.round(36 * dpr);
+      const sctx = sprite.getContext('2d');
+      const r = 18 * dpr;
+      const flare = sctx.createRadialGradient(r, r, 0, r, r, r);
+      flare.addColorStop(0, 'rgba(255,255,255,0.95)');
+      flare.addColorStop(0.35, `rgba(${core.r},${core.g},${core.b},0.7)`);
+      flare.addColorStop(1, `rgba(${mid.r},${mid.g},${mid.b},0)`);
+      sctx.fillStyle = flare;
+      sctx.fillRect(0, 0, sprite.width, sprite.height);
+      Trail._flareSprite = sprite;
+    },
+
+    // Runs on the shared FxLoop; returns false (unsubscribes) once the last point/spark has
+    // faded, after painting one final clear frame.
+    _draw(now) {
+      const ctx = Trail.ctx;
+      if (!ctx) return false;
+      const fadeMs = CONFIG.trailFadeMs;
+
+      ctx.setTransform(Trail._dpr, 0, 0, Trail._dpr, 0, 0);
+      ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+      // Expire in place (write-index compaction) — no per-frame array reallocation. Points
+      // are append-ordered by time; sparks have per-spark lifetimes, so both get the same
+      // in-place sweep.
       const pts = Trail.points;
+      let w = 0;
+      for (let r = 0; r < pts.length; r += 1) {
+        if (now - pts[r].t < fadeMs) pts[w++] = pts[r];
+      }
+      pts.length = w;
+      const sparks = Trail.sparks;
+      w = 0;
+      for (let r = 0; r < sparks.length; r += 1) {
+        if (now - sparks[r].t < sparks[r].life) sparks[w++] = sparks[r];
+      }
+      sparks.length = w;
+
+      Trail._refreshPalette();
+      const buckets = Trail._rampBuckets;
+      const core = buckets[0];
+
       const hasRibbon = pts.length > 1;
-      if (hasRibbon || Trail.sparks.length) {
+      if (hasRibbon || sparks.length) {
         // Points/sparks are stored in doc coords; render at doc − scroll so the wake stays
         // pinned to the article while the camera moves (the canvas itself stays fixed).
         const sx = window.scrollX;
@@ -1453,16 +1566,20 @@
 
         if (hasRibbon) {
           // 1) Connected, tapering ribbon — thick & white-hot at the ship, thinning and
-          //    cooling toward the tail. Drawn twice (soft underlay + bright core).
+          //    cooling toward the tail. Drawn twice (soft underlay + bright core); segments
+          //    too faint to see (alpha < 0.02) are skipped entirely.
           for (let pass = 0; pass < 2; pass += 1) {
+            const alphaScale = pass === 0 ? 0.16 : 0.5;
+            const widthBoost = pass === 0 ? 2.4 : 1;
             for (let i = 1; i < pts.length; i += 1) {
               const b = pts[i];
               const age = (now - b.t) / fadeMs;
               const e = 1 - age;
-              const c = ramp(age);
-              const widthBoost = pass === 0 ? 2.4 : 1;
+              const alpha = e * e * alphaScale;
+              if (alpha < 0.02) continue;
+              const c = buckets[Math.min(47, Math.max(0, Math.round(age * 47)))];
               ctx.lineWidth = (1 + e * e * 8) * widthBoost;
-              ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${(e * e * (pass === 0 ? 0.16 : 0.5)).toFixed(3)})`;
+              ctx.strokeStyle = `rgba(${c.r},${c.g},${c.b},${alpha.toFixed(3)})`;
               ctx.beginPath();
               ctx.moveTo(pts[i - 1].x - sx, pts[i - 1].y - sy);
               ctx.lineTo(b.x - sx, b.y - sy);
@@ -1470,24 +1587,16 @@
             }
           }
 
-          // 2) Bright nozzle flare at the freshest point.
+          // 2) Bright nozzle flare at the freshest point (prerendered sprite).
           const head = pts[pts.length - 1];
-          const hx = head.x - sx;
-          const hy = head.y - sy;
-          const flare = ctx.createRadialGradient(hx, hy, 0, hx, hy, 18);
-          flare.addColorStop(0, 'rgba(255,255,255,0.95)');
-          flare.addColorStop(0.35, `rgba(${core.r},${core.g},${core.b},0.7)`);
-          flare.addColorStop(1, `rgba(${mid.r},${mid.g},${mid.b},0)`);
-          ctx.fillStyle = flare;
-          ctx.beginPath();
-          ctx.arc(hx, hy, 18, 0, Math.PI * 2);
-          ctx.fill();
+          ctx.drawImage(Trail._flareSprite, head.x - sx - 18, head.y - sy - 18, 36, 36);
         }
 
         // 3) Embers (independent of the ribbon, so ignition/landing bursts show too).
-        for (const s of Trail.sparks) {
+        for (const s of sparks) {
           const sAge = (now - s.t) / s.life;
           const e = 1 - sAge;
+          if (e * 0.9 < 0.02) continue;
           const px = s.x + s.vx * (now - s.t) * 0.06 - sx;
           const py = s.y + s.vy * (now - s.t) * 0.06 - sy;
           ctx.fillStyle = `rgba(${core.r},${core.g},${core.b},${(e * 0.9).toFixed(3)})`;
@@ -1498,11 +1607,7 @@
         ctx.globalCompositeOperation = 'source-over';
       }
 
-      if (pts.length > 0 || Trail.sparks.length > 0) {
-        Trail._rafId = requestAnimationFrame(Trail._draw.bind(Trail));
-      } else {
-        Trail._rafId = null;
-      }
+      return pts.length > 0 || sparks.length > 0;
     },
 
     // Drop the wake ribbon but keep any live embers (used at touchdown so the cruise
@@ -1518,10 +1623,7 @@
         Trail.ctx.setTransform(Trail._dpr, 0, 0, Trail._dpr, 0, 0);
         Trail.ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
-      if (Trail._rafId) {
-        cancelAnimationFrame(Trail._rafId);
-        Trail._rafId = null;
-      }
+      FxLoop.remove(Trail._draw);
     },
   };
 
@@ -3073,15 +3175,20 @@
 
     // Choose the anchor the ship should fly to from an already-scanned candidate list —
     // callers that need the candidate list anyway (for diagnostics) scan once and pick here.
+    // Candidates are {link, rect} entries (see candidates()); returns the bare link.
     pickFrom(candidates) {
       if (!candidates.length) return null;
 
       const best = Links.bestVisible(candidates);
-      if (best && Links.visibilityScore(best) > 0.7) return best;
+      if (best && Links.visibilityScore(best.rect) > 0.7) return best.link;
 
-      return Links.nearestBelowViewport(candidates) || Links.nearestToViewport(candidates);
+      const chosen = Links.nearestBelowViewport(candidates) || Links.nearestToViewport(candidates);
+      return chosen.link;
     },
 
+    // Returns [{link, rect}] — each candidate's bounding rect is measured exactly once here
+    // and every scorer/sorter reads the cached rect (a per-comparison getBoundingClientRect
+    // in the sort paths forced repeated layout reads on link-dense pages).
     candidates(title, aliases = []) {
       const root =
         document.querySelector(SELECTORS.articleBody) ||
@@ -3090,10 +3197,15 @@
       // Cheap string filters first (href parse + title match), then the expensive
       // computed-style/rect visibility check only on the few links that matched — a Parsoid
       // article can carry ~2000 internal links and a per-link getComputedStyle scan is slow.
-      return [...root.querySelectorAll(SELECTORS.articleLink)]
-        .filter((link) => Links.isArticleLinkHref(link))
-        .filter((link) => Links.matchesTitle(link, title, aliases))
-        .filter((link) => Links.isVisiblyRendered(link));
+      const entries = [];
+      for (const link of root.querySelectorAll(SELECTORS.articleLink)) {
+        if (!Links.isArticleLinkHref(link)) continue;
+        if (!Links.matchesTitle(link, title, aliases)) continue;
+        const rect = link.getBoundingClientRect();
+        if (!Links.isRendered(link, {rect})) continue;
+        entries.push({link, rect});
+      }
+      return entries;
     },
 
     // The graph counts ALL namespace-0 links — including those in infoboxes, sidebars,
@@ -3112,8 +3224,9 @@
       return false;
     },
 
-    // Allow off-viewport links; only exclude truly hidden elements. Excluding hidden ones
-    // makes Links.locate return null for such a target, which is what triggers Links.reveal.
+    // The single rendered-visibility test (used by candidates() in loose form and isOnPage
+    // in strict form). Allow off-viewport links; only exclude truly hidden elements —
+    // excluding hidden ones makes Links.locate return null, which is what triggers reveal.
     //
     // TWO hidden-by-a-collapsed-ancestor shapes exist and both must be caught:
     // - display:none ancestor → the link keeps display:inline but renders a 0×0 box.
@@ -3121,9 +3234,15 @@
     //   find-in-page) → content-visibility:hidden, and the link keeps a NONZERO rect while
     //   being unpainted — a phantom the display/visibility/rect checks all miss. Only
     //   checkVisibility() sees through it; without the fix the ship lands in empty space.
-    isVisiblyRendered(link) {
-      const rect = link.getBoundingClientRect();
-      if (rect.width === 0 && rect.height === 0) return false;
+    //
+    // `strict` is the landing-time semantic: ANY zero dimension means unpaintable. The loose
+    // candidate semantic only rejects a fully-collapsed 0×0 box. `rect` may be passed by a
+    // caller that already measured it.
+    isRendered(link, {strict = false, rect = null} = {}) {
+      const box = rect || link.getBoundingClientRect();
+      const flat = strict ? (box.width === 0 || box.height === 0)
+        : (box.width === 0 && box.height === 0);
+      if (flat) return false;
       if (typeof link.checkVisibility === 'function') {
         return link.checkVisibility(
           {contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true});
@@ -3234,58 +3353,62 @@
       if (toggle && typeof toggle.click === 'function') toggle.click();
     },
 
+    // Landing-time check: is the link truly paintable right now?
     isOnPage(link) {
-      const rect = link.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return false;
-      if (typeof link.checkVisibility === 'function') {
-        return link.checkVisibility(
-          {contentVisibilityAuto: true, visibilityProperty: true, opacityProperty: true});
-      }
-      const style = window.getComputedStyle(link);
-      return style.display !== 'none' && style.visibility !== 'hidden';
+      return Links.isRendered(link, {strict: true});
     },
 
-    bestVisible(links) {
+    // The scorers below all take {link, rect} candidate entries and read the rect captured
+    // at scan time — never re-measure inside a sort comparator.
+    bestVisible(entries) {
       let best = null;
       let bestScore = -Infinity;
-      for (const link of links) {
-        const score = Links.visibilityScore(link) * 1000 - Links.distanceFromFigure(link);
+      for (const entry of entries) {
+        const score =
+          Links.visibilityScore(entry.rect) * 1000 - Links.distanceFromFigure(entry.rect);
         if (score > bestScore) {
-          best = link;
+          best = entry;
           bestScore = score;
         }
       }
       return best;
     },
 
-    visibilityScore(link) {
-      const rect = link.getBoundingClientRect();
+    visibilityScore(rect) {
       const visW = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
       const visH = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
       return (visW * visH) / Math.max(rect.width * rect.height, 1);
     },
 
-    distanceFromFigure(link) {
-      const rect = link.getBoundingClientRect();
+    distanceFromFigure(rect) {
       return Math.hypot(
         rect.left + rect.width / 2 - runtime.figurePosition.x,
         rect.top + rect.height / 2 - runtime.figurePosition.y,
       );
     },
 
-    nearestToViewport(links) {
+    nearestToViewport(entries) {
       const cy = window.innerHeight / 2;
-      return links
-        .map((link) => ({link, d: Math.abs(link.getBoundingClientRect().top - cy)}))
-        .sort((a, b) => a.d - b.d)[0].link;
+      let best = null;
+      let bestD = Infinity;
+      for (const entry of entries) {
+        const d = Math.abs(entry.rect.top - cy);
+        if (d < bestD) {
+          best = entry;
+          bestD = d;
+        }
+      }
+      return best;
     },
 
-    nearestBelowViewport(links) {
+    nearestBelowViewport(entries) {
       const threshold = panelObstacleRect().top;
-      const below = links
-        .filter((link) => link.getBoundingClientRect().top > threshold - 40)
-        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
-      return below[0] || null;
+      let best = null;
+      for (const entry of entries) {
+        if (entry.rect.top <= threshold - 40) continue;
+        if (!best || entry.rect.top < best.rect.top) best = entry;
+      }
+      return best;
     },
   };
 
@@ -3577,19 +3700,18 @@
 
   // ─── Animation helpers ───────────────────────────────────────────────────────
 
+  // Tween driver on the shared FxLoop: concurrent animations (a cruise + the trail canvas)
+  // ride one rAF chain instead of racing separate ones.
   function animate(duration, onFrame) {
     return new Promise((resolve) => {
       const start = performance.now();
-      function tick(now) {
+      FxLoop.add(function tick(now) {
         const progress = clamp((now - start) / duration, 0, 1);
         onFrame(progress);
-        if (progress < 1) {
-          requestAnimationFrame(tick);
-        } else {
-          resolve();
-        }
-      }
-      requestAnimationFrame(tick);
+        if (progress < 1) return true;
+        resolve();
+        return false;
+      });
     });
   }
 

@@ -122,7 +122,7 @@ article. Three things to handle:
   `hidden="until-found"` (`content-visibility: hidden`) — links inside keep a NONZERO
   bounding rect while being unpainted, so display/visibility/0×0-rect checks all pass and the
   ship lands in empty space. Only `element.checkVisibility({contentVisibilityAuto: true, …})`
-  sees through it — visibility tests must go through `Links.isVisiblyRendered`/`isOnPage`.
+  sees through it — visibility tests must go through `Links.isRendered`/`isOnPage`.
   Also a race: navboxes are made collapsible seconds AFTER page load, so a link located while
   visible can be re-hidden mid-flight — guard at flight start and touchdown
   (`Links.ensureVisible`).
