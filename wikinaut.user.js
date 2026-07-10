@@ -63,8 +63,13 @@
   };
 
   // Palette (retro-futuristic wireframe). Colors mirror the design spec.
+  // THE single source of truth for every branded color: each entry is emitted as a
+  // --wn-<kebab-name> CSS custom property plus a --wn-<kebab-name>-rgb channel triplet
+  // (for rgba(var(--wn-x-rgb), α) alpha variants) on all three style hosts — see the CSS
+  // var block. Restyle by editing values here, never by scattering literals.
   const PALETTE = {
     bg: '#0A0F1C',
+    spaceInk: '#030812',    // deepest space fill behind the star chart / status readout
     cyan: '#00F3FF',
     cyanCore: '#66FFFF',
     cyanGlow: '#A0FFFF',
@@ -82,6 +87,26 @@
     steelDark: '#3A4453',
     steelShadow: '#1B2230',
   };
+
+  // '#00F3FF' → '0,243,255' for the --wn-*-rgb channel triplets and paletteRgba below.
+  function paletteChannels(hex) {
+    const {r, g, b} = hexToRgb(hex);
+    return `${r},${g},${b}`;
+  }
+
+  // rgba() string from a PALETTE entry — for the few places (SVG presentation attributes)
+  // where CSS var() isn't allowed and a literal color string must be built in JS.
+  function paletteRgba(name, alpha) {
+    return `rgba(${paletteChannels(PALETTE[name])},${alpha})`;
+  }
+
+  // Every PALETTE entry as CSS custom-property declarations: --wn-cyan-core / --wn-cyan-core-rgb.
+  const PALETTE_CSS_VARS = Object.entries(PALETTE)
+    .map(([name, hex]) => {
+      const kebab = name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+      return `--wn-${kebab}: ${hex}; --wn-${kebab}-rgb: ${paletteChannels(hex)};`;
+    })
+    .join('\n      ');
 
   const SETTINGS_DEFAULTS = {
     walkingPixelsPerSecond: 550,  // must sit on the speed slider's step grid (step=50), or
@@ -111,6 +136,12 @@
   // locally installed) and fall through to system faces otherwise; if a display font ever
   // becomes part of the design, load it via a non-blocking <link rel="stylesheet"> with
   // font-display: swap — never @import.
+  //
+  // Color policy: every branded color comes from PALETTE via var(--wn-*) / rgba(var(--wn-*-rgb), α).
+  // Deliberately literal: neutral white/black highlights, the launch-flame orange ramp and
+  // steel glints (single-use FX shading), and .wikinaut-reveal-pulse (animates article
+  // containers outside the var hosts). SVG presentation attributes can't resolve var() —
+  // renderSvg and renderRoute interpolate from PALETTE directly instead.
   const CSS = `
     #wikinaut-root,
     #wikinaut-root * {
@@ -124,14 +155,7 @@
     #wikinaut-root,
     #wikinaut-ship-shell,
     #wikinaut-jump-layer {
-      --wn-bg: ${PALETTE.bg};
-      --wn-cyan: ${PALETTE.cyan};
-      --wn-cyan-core: ${PALETTE.cyanCore};
-      --wn-cyan-glow: ${PALETTE.cyanGlow};
-      --wn-blue: ${PALETTE.blue};
-      --wn-dim: ${PALETTE.dimWhite};
-      --wn-purple: ${PALETTE.purple};
-      --wn-amber: ${PALETTE.amber};
+      ${PALETTE_CSS_VARS}
       --wn-ship-color: ${PALETTE.cyan};
       color: var(--wn-cyan);
       font-family: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
@@ -152,14 +176,14 @@
       gap: 10px 12px;
       padding: 12px 16px;
       background:
-        radial-gradient(120% 160% at 50% 120%, rgba(0,243,255,0.07), transparent 60%),
+        radial-gradient(120% 160% at 50% 120%, rgba(var(--wn-cyan-rgb),0.07), transparent 60%),
         linear-gradient(180deg, #0d1426 0%, var(--wn-bg) 100%);
-      border: 1px solid rgba(0,243,255,0.55);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.55);
       border-radius: 8px;
       box-shadow:
-        0 0 0 1px rgba(0,243,255,0.08),
-        0 0 22px rgba(0,243,255,0.18),
-        inset 0 0 28px rgba(0,243,255,0.06);
+        0 0 0 1px rgba(var(--wn-cyan-rgb),0.08),
+        0 0 22px rgba(var(--wn-cyan-rgb),0.18),
+        inset 0 0 28px rgba(var(--wn-cyan-rgb),0.06);
       backdrop-filter: blur(2px);
     }
 
@@ -170,7 +194,7 @@
       inset: 0;
       border-radius: 8px;
       pointer-events: none;
-      background-image: repeating-linear-gradient(0deg, rgba(0,243,255,0.05) 0 1px, transparent 1px 4px);
+      background-image: repeating-linear-gradient(0deg, rgba(var(--wn-cyan-rgb),0.05) 0 1px, transparent 1px 4px);
       opacity: 0.5;
     }
 
@@ -181,7 +205,7 @@
       inset: 5px;
       pointer-events: none;
       opacity: 0.75;
-      filter: drop-shadow(0 0 4px rgba(0,243,255,0.45));
+      filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.45));
       background-image:
         linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan)),
         linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan)),
@@ -204,14 +228,14 @@
       letter-spacing: 2px;
       text-transform: uppercase;
       color: var(--wn-cyan);
-      text-shadow: 0 0 8px rgba(0,243,255,0.6);
+      text-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.6);
     }
 
     #wikinaut-target-input {
       width: 100%;
       padding: 9px 12px;
-      background: rgba(3,8,18,0.85);
-      border: 1px solid rgba(0,243,255,0.45);
+      background: rgba(var(--wn-space-ink-rgb),0.85);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.45);
       border-radius: 4px;
       color: var(--wn-cyan-glow);
       font-family: 'Rajdhani', sans-serif;
@@ -220,17 +244,17 @@
       outline: none;
       transition: border-color 120ms, box-shadow 120ms;
     }
-    #wikinaut-target-input::placeholder { color: rgba(0,243,255,0.4); }
+    #wikinaut-target-input::placeholder { color: rgba(var(--wn-cyan-rgb),0.4); }
     #wikinaut-target-input:focus {
       border-color: var(--wn-cyan);
-      box-shadow: 0 0 14px rgba(0,243,255,0.4), inset 0 0 10px rgba(0,243,255,0.12);
+      box-shadow: 0 0 14px rgba(var(--wn-cyan-rgb),0.4), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.12);
     }
 
     .wikinaut-button {
       padding: 9px 16px;
       border: 1px solid var(--wn-cyan);
       border-radius: 4px;
-      background: linear-gradient(180deg, rgba(0,243,255,0.18), rgba(0,243,255,0.05));
+      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.18), rgba(var(--wn-cyan-rgb),0.05));
       color: var(--wn-cyan-glow);
       font-family: 'Orbitron', sans-serif;
       font-size: 11px;
@@ -239,18 +263,18 @@
       text-transform: uppercase;
       cursor: pointer;
       white-space: nowrap;
-      text-shadow: 0 0 8px rgba(0,243,255,0.5);
+      text-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.5);
       transition: box-shadow 120ms, background 120ms, transform 80ms;
     }
     .wikinaut-button:hover:not(:disabled) {
-      box-shadow: 0 0 16px rgba(0,243,255,0.5);
-      background: linear-gradient(180deg, rgba(0,243,255,0.3), rgba(0,243,255,0.1));
+      box-shadow: 0 0 16px rgba(var(--wn-cyan-rgb),0.5);
+      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.3), rgba(var(--wn-cyan-rgb),0.1));
     }
     .wikinaut-button:active:not(:disabled) { transform: translateY(1px); }
     .wikinaut-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .wikinaut-button.secondary {
-      border-color: rgba(0,243,255,0.5);
-      background: rgba(0,243,255,0.04);
+      border-color: rgba(var(--wn-cyan-rgb),0.5);
+      background: rgba(var(--wn-cyan-rgb),0.04);
       color: var(--wn-cyan);
     }
     .wikinaut-button.icon {
@@ -258,7 +282,7 @@
       font-size: 14px;
     }
     .wikinaut-button.icon[aria-expanded="true"] {
-      box-shadow: 0 0 14px rgba(0,243,255,0.55);
+      box-shadow: 0 0 14px rgba(var(--wn-cyan-rgb),0.55);
     }
 
     /* ── Autocomplete ──────────────────────────────────────────────────── */
@@ -271,9 +295,9 @@
       display: none;
       flex-direction: column;
       background: rgba(5,10,22,0.97);
-      border: 1px solid rgba(0,243,255,0.45);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.45);
       border-radius: 4px;
-      box-shadow: 0 0 18px rgba(0,243,255,0.25);
+      box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.25);
       overflow: hidden;
       z-index: 5;
     }
@@ -283,17 +307,17 @@
       padding: 8px 12px;
       border: none;
       background: transparent;
-      color: var(--wn-dim);
+      color: var(--wn-dim-white);
       font-family: 'Rajdhani', sans-serif;
       font-size: 14px;
       text-align: left;
       cursor: pointer;
-      border-bottom: 1px solid rgba(0,243,255,0.12);
+      border-bottom: 1px solid rgba(var(--wn-cyan-rgb),0.12);
     }
     .wikinaut-suggestion:last-child { border-bottom: none; }
     .wikinaut-suggestion:hover,
     .wikinaut-suggestion:focus {
-      background: rgba(0,243,255,0.12);
+      background: rgba(var(--wn-cyan-rgb),0.12);
       color: var(--wn-cyan-glow);
       outline: none;
     }
@@ -304,7 +328,7 @@
       font-size: 11px;
       letter-spacing: 0.4px;
       line-height: 1.1;
-      color: ${PALETTE.amber};
+      color: var(--wn-amber);
       opacity: 0;
       transition: opacity 140ms ease;
     }
@@ -316,14 +340,14 @@
       grid-column: 1 / -1;
       position: relative;
       padding: 10px 12px 8px;
-      border: 1px solid rgba(0,243,255,0.25);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.25);
       border-radius: 6px;
       background:
         radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.5), transparent),
-        radial-gradient(1px 1px at 70% 60%, rgba(0,243,255,0.6), transparent),
-        radial-gradient(1px 1px at 45% 80%, rgba(189,147,249,0.5), transparent),
+        radial-gradient(1px 1px at 70% 60%, rgba(var(--wn-cyan-rgb),0.6), transparent),
+        radial-gradient(1px 1px at 45% 80%, rgba(var(--wn-purple-rgb),0.5), transparent),
         radial-gradient(1px 1px at 88% 25%, rgba(255,255,255,0.4), transparent),
-        linear-gradient(180deg, rgba(3,8,18,0.7), rgba(3,8,18,0.95));
+        linear-gradient(180deg, rgba(var(--wn-space-ink-rgb),0.7), rgba(var(--wn-space-ink-rgb),0.95));
       background-size: 200px 100px, 240px 120px, 180px 90px, 220px 110px, 100% 100%;
       overflow: hidden;
     }
@@ -352,7 +376,7 @@
     /* Errors get a distinct amber look so they read differently from routine progress text. */
     #wikinaut-status[data-error="true"] {
       color: var(--wn-amber);
-      text-shadow: 0 0 8px rgba(255,184,76,0.5);
+      text-shadow: 0 0 8px rgba(var(--wn-amber-rgb),0.5);
     }
     #wikinaut-status[data-error="true"]::before { content: '⚠ '; }
 
@@ -363,15 +387,15 @@
       animation: wikinaut-plotting-scan 1.6s ease-in-out infinite;
     }
     @keyframes wikinaut-plotting-scan {
-      0%,100% { box-shadow: 0 0 0 1px rgba(0,243,255,0.08), 0 0 22px rgba(0,243,255,0.18), inset 0 0 28px rgba(0,243,255,0.06); }
-      50%     { box-shadow: 0 0 0 1px rgba(0,243,255,0.16), 0 0 30px rgba(0,243,255,0.32), inset 0 0 34px rgba(0,243,255,0.12); }
+      0%,100% { box-shadow: 0 0 0 1px rgba(var(--wn-cyan-rgb),0.08), 0 0 22px rgba(var(--wn-cyan-rgb),0.18), inset 0 0 28px rgba(var(--wn-cyan-rgb),0.06); }
+      50%     { box-shadow: 0 0 0 1px rgba(var(--wn-cyan-rgb),0.16), 0 0 30px rgba(var(--wn-cyan-rgb),0.32), inset 0 0 34px rgba(var(--wn-cyan-rgb),0.12); }
     }
     #wikinaut-panel[data-phase="stalled"] {
-      border-color: rgba(255,184,76,0.65);
+      border-color: rgba(var(--wn-amber-rgb),0.65);
       box-shadow:
-        0 0 0 1px rgba(255,184,76,0.12),
-        0 0 22px rgba(255,184,76,0.25),
-        inset 0 0 28px rgba(255,184,76,0.08);
+        0 0 0 1px rgba(var(--wn-amber-rgb),0.12),
+        0 0 22px rgba(var(--wn-amber-rgb),0.25),
+        inset 0 0 28px rgba(var(--wn-amber-rgb),0.08);
     }
 
     /* Launch computer emphasis: once a course is charted, LAUNCH becomes unmistakably the
@@ -381,19 +405,19 @@
        silenced under reduced motion. */
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button:not(:disabled) {
       border-color: var(--wn-cyan);
-      background: linear-gradient(180deg, rgba(0,243,255,0.55), rgba(0,243,255,0.22));
+      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.55), rgba(var(--wn-cyan-rgb),0.22));
       color: #eaffff;
-      text-shadow: 0 0 10px rgba(224,255,255,0.9);
-      box-shadow: 0 0 16px rgba(0,243,255,0.6), inset 0 0 10px rgba(0,243,255,0.3);
+      text-shadow: 0 0 10px rgba(var(--wn-flash-rgb),0.9);
+      box-shadow: 0 0 16px rgba(var(--wn-cyan-rgb),0.6), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.3);
       animation: wikinaut-launch-ready 1.6s ease-in-out infinite;
     }
     @keyframes wikinaut-launch-ready {
-      0%,100% { box-shadow: 0 0 10px rgba(0,243,255,0.45), inset 0 0 8px rgba(0,243,255,0.25); }
-      50%     { box-shadow: 0 0 26px rgba(0,243,255,0.9), inset 0 0 14px rgba(0,243,255,0.45); }
+      0%,100% { box-shadow: 0 0 10px rgba(var(--wn-cyan-rgb),0.45), inset 0 0 8px rgba(var(--wn-cyan-rgb),0.25); }
+      50%     { box-shadow: 0 0 26px rgba(var(--wn-cyan-rgb),0.9), inset 0 0 14px rgba(var(--wn-cyan-rgb),0.45); }
     }
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-chart-button {
-      border-color: rgba(0,243,255,0.35);
-      background: rgba(0,243,255,0.04);
+      border-color: rgba(var(--wn-cyan-rgb),0.35);
+      background: rgba(var(--wn-cyan-rgb),0.04);
       color: var(--wn-cyan);
       text-shadow: none;
     }
@@ -454,14 +478,14 @@
     }
     #wikinaut-starchart { display: block; width: 100%; height: 176px; }
 
-    .wikinaut-chart-grid line { stroke: rgba(0,243,255,0.10); stroke-width: 0.5; }
-    .wikinaut-chart-ring { fill: none; stroke: rgba(0,243,255,0.13); stroke-width: 0.6; }
+    .wikinaut-chart-grid line { stroke: rgba(var(--wn-cyan-rgb),0.10); stroke-width: 0.5; }
+    .wikinaut-chart-ring { fill: none; stroke: rgba(var(--wn-cyan-rgb),0.13); stroke-width: 0.6; }
     .wikinaut-chart-star { fill: #fff; }
 
     /* Dotted plotted track (static) with a glowing line drawn on top (animated). */
     #wikinaut-route-track {
       fill: none;
-      stroke: rgba(0,243,255,0.28);
+      stroke: rgba(var(--wn-cyan-rgb),0.28);
       stroke-width: 1.4;
       stroke-linecap: round;
       stroke-dasharray: 0.5 6;
@@ -472,7 +496,7 @@
       stroke-width: 1.6;
       stroke-linecap: round;
       stroke-linejoin: round;
-      filter: drop-shadow(0 0 4px rgba(0,243,255,0.6)) drop-shadow(0 0 9px rgba(0,243,255,0.35));
+      filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.6)) drop-shadow(0 0 9px rgba(var(--wn-cyan-rgb),0.35));
     }
 
     .wikinaut-wp {
@@ -483,10 +507,10 @@
       animation: wikinaut-wp-pop 380ms cubic-bezier(.2,.8,.2,1) forwards;
       animation-delay: var(--d, 0ms);
     }
-    .wikinaut-wp-node { fill: rgba(3,8,18,0.9); stroke: rgba(0,243,255,0.5); stroke-width: 1.2; }
-    .wikinaut-wp-core { fill: var(--wn-dim); }
+    .wikinaut-wp-node { fill: rgba(var(--wn-space-ink-rgb),0.9); stroke: rgba(var(--wn-cyan-rgb),0.5); stroke-width: 1.2; }
+    .wikinaut-wp-core { fill: var(--wn-dim-white); }
     .wikinaut-wp-label {
-      fill: var(--wn-dim);
+      fill: var(--wn-dim-white);
       font-family: 'Rajdhani', sans-serif;
       font-size: 9px;
       letter-spacing: 0.2px;
@@ -499,8 +523,8 @@
     }
     .wikinaut-wp.current .wikinaut-wp-core { fill: var(--wn-cyan); }
     @keyframes wikinaut-wp-pulse {
-      0%,100% { filter: drop-shadow(0 0 4px rgba(0,243,255,0.5)); }
-      50%     { filter: drop-shadow(0 0 10px rgba(0,243,255,0.95)); }
+      0%,100% { filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.5)); }
+      50%     { filter: drop-shadow(0 0 10px rgba(var(--wn-cyan-rgb),0.95)); }
     }
     .wikinaut-wp.current .wikinaut-wp-label { fill: var(--wn-cyan-glow); }
     .wikinaut-wp.next .wikinaut-wp-node { stroke: var(--wn-purple); }
@@ -520,7 +544,7 @@
       font-size: 9px;
       letter-spacing: 1.5px;
       text-transform: uppercase;
-      color: rgba(0,243,255,0.55);
+      color: rgba(var(--wn-cyan-rgb),0.55);
     }
 
     /* ── Launch sequence (spaceport gantry + bay doors + exhaust + smoke + shake) ── */
@@ -547,10 +571,10 @@
       transition: transform 460ms cubic-bezier(.2,.8,.2,1);
     }
     .wikinaut-gantry line {
-      stroke: rgba(0,243,255,0.7);
+      stroke: rgba(var(--wn-cyan-rgb),0.7);
       stroke-width: 2;
       stroke-linecap: round;
-      filter: drop-shadow(0 0 3px rgba(0,243,255,0.6));
+      filter: drop-shadow(0 0 3px rgba(var(--wn-cyan-rgb),0.6));
     }
     #wikinaut-panel[data-launch="arming"] .wikinaut-gantry,
     #wikinaut-panel[data-launch="launch"] .wikinaut-gantry { transform: scaleY(1); }
@@ -567,8 +591,8 @@
       bottom: 0;
       width: 46%;
       height: 8px;
-      background: linear-gradient(180deg, ${PALETTE.steel}, ${PALETTE.steelDark});
-      border: 1px solid rgba(0,243,255,0.5);
+      background: linear-gradient(180deg, var(--wn-steel), var(--wn-steel-dark));
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.5);
       transition: transform 380ms ease;
     }
     .wikinaut-baydoor.left { left: 4%; }
@@ -637,7 +661,7 @@
       font-size: 64px;
       font-weight: 800;
       color: var(--wn-cyan-glow);
-      text-shadow: 0 0 18px rgba(0,243,255,0.85);
+      text-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.85);
       pointer-events: none;
       z-index: 3;
     }
@@ -700,9 +724,9 @@
       align-items: center;
       gap: 10px 14px;
       padding: 10px 12px;
-      border: 1px solid rgba(0,243,255,0.25);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.25);
       border-radius: 6px;
-      background: rgba(3,8,18,0.85);
+      background: rgba(var(--wn-space-ink-rgb),0.85);
     }
     #wikinaut-settings-section[hidden] { display: none; }
 
@@ -714,25 +738,25 @@
       text-transform: uppercase;
       color: var(--wn-cyan);
     }
-    .wikinaut-settings-value { font-size: 12px; color: var(--wn-dim); }
-    .wikinaut-range { width: 100%; accent-color: ${PALETTE.cyan}; }
+    .wikinaut-settings-value { font-size: 12px; color: var(--wn-dim-white); }
+    .wikinaut-range { width: 100%; accent-color: var(--wn-cyan); }
     .wikinaut-color-input {
       width: 40px; height: 24px; padding: 0;
-      background: transparent; border: 1px solid rgba(0,243,255,0.4); border-radius: 3px;
+      background: transparent; border: 1px solid rgba(var(--wn-cyan-rgb),0.4); border-radius: 3px;
       cursor: pointer;
     }
     #wikinaut-backend-input {
       grid-column: 2 / -1;
       padding: 7px 10px;
-      background: rgba(3,8,18,0.9);
-      border: 1px solid rgba(0,243,255,0.4);
+      background: rgba(var(--wn-space-ink-rgb),0.9);
+      border: 1px solid rgba(var(--wn-cyan-rgb),0.4);
       border-radius: 4px;
       color: var(--wn-cyan-glow);
       font-family: 'Rajdhani', sans-serif;
       font-size: 13px;
       outline: none;
     }
-    #wikinaut-backend-input:focus { border-color: var(--wn-cyan); box-shadow: 0 0 10px rgba(0,243,255,0.35); }
+    #wikinaut-backend-input:focus { border-color: var(--wn-cyan); box-shadow: 0 0 10px rgba(var(--wn-cyan-rgb),0.35); }
     #wikinaut-settings-reset { grid-column: 1 / -1; justify-self: start; }
 
     /* ── Ship ──────────────────────────────────────────────────────────── */
@@ -760,24 +784,24 @@
       position: absolute;
       inset: -45%;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(0,243,255,0.30), rgba(0,243,255,0.10) 46%, transparent 70%);
+      background: radial-gradient(circle, rgba(var(--wn-cyan-rgb),0.30), rgba(var(--wn-cyan-rgb),0.10) 46%, transparent 70%);
       pointer-events: none;
       z-index: -1;
     }
     /* Cyan rim-glow on the whole hull (doesn't fight the animated core/body filters). */
-    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 5px rgba(0,243,255,0.55)); }
+    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 5px rgba(var(--wn-cyan-rgb),0.55)); }
 
     /* Gunmetal fighter: metallic hull, tinted canopy, glowing blue engine. */
     .wikinaut-ship-hull {
       fill: url(#wikinaut-hull-grad);
-      stroke: ${PALETTE.steelShadow};
+      stroke: var(--wn-steel-shadow);
       stroke-width: 1;
       stroke-linejoin: round;
       filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55));
     }
     .wikinaut-ship-wing {
       fill: url(#wikinaut-wing-grad);
-      stroke: ${PALETTE.steelShadow};
+      stroke: var(--wn-steel-shadow);
       stroke-width: 0.9;
       stroke-linejoin: round;
     }
@@ -788,7 +812,7 @@
     }
     .wikinaut-ship-line {
       fill: none;
-      stroke: ${PALETTE.steelShadow};
+      stroke: var(--wn-steel-shadow);
       stroke-width: 0.7;
       stroke-linecap: round;
       stroke-linejoin: round;
@@ -855,7 +879,7 @@
     @keyframes wikinaut-hover { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
     @keyframes wikinaut-thrust { from { opacity: 0.3; } to { opacity: 1; } }
     @keyframes wikinaut-scan { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
-    @keyframes wikinaut-charge { from { filter: drop-shadow(0 0 4px ${PALETTE.cyanCore}); } to { filter: drop-shadow(0 0 12px ${PALETTE.flash}); } }
+    @keyframes wikinaut-charge { from { filter: drop-shadow(0 0 4px var(--wn-cyan-core)); } to { filter: drop-shadow(0 0 12px var(--wn-flash)); } }
     @keyframes wikinaut-orbit { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
     /* ── Trail canvas ──────────────────────────────────────────────────── */
@@ -900,8 +924,8 @@
       width: 2px;
       transform-origin: 0 50%;
       border-radius: 2px;
-      background: linear-gradient(90deg, #ffffff, ${PALETTE.cyanGlow} 22%, ${PALETTE.cyan} 44%, ${PALETTE.streakA} 72%, transparent);
-      box-shadow: 0 0 12px ${PALETTE.streakB}, 0 0 4px #ffffff;
+      background: linear-gradient(90deg, #ffffff, var(--wn-cyan-glow) 22%, var(--wn-cyan) 44%, var(--wn-streak-a) 72%, transparent);
+      box-shadow: 0 0 12px var(--wn-streak-b), 0 0 4px #ffffff;
       animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.5,0,.85,.5) forwards;
     }
     .wikinaut-warp[data-mode="arrive"] .wikinaut-warp-streak {
@@ -926,7 +950,7 @@
       height: 40vmax;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, ${PALETTE.cyanGlow} 34%, rgba(0,243,255,0.5) 54%, transparent 76%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, var(--wn-cyan-glow) 34%, rgba(var(--wn-cyan-rgb),0.5) 54%, transparent 76%);
       opacity: 0;
       animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
     }
@@ -949,8 +973,8 @@
       mix-blend-mode: screen;
       opacity: 0.55;
     }
-    .wikinaut-flash::before { background: radial-gradient(circle, rgba(0,243,255,0.5) 0%, transparent 62%); transform: translate(-7px, -4px); }
-    .wikinaut-flash::after  { background: radial-gradient(circle, rgba(255,0,255,0.45) 0%, transparent 62%); transform: translate(7px, 4px); }
+    .wikinaut-flash::before { background: radial-gradient(circle, rgba(var(--wn-cyan-rgb),0.5) 0%, transparent 62%); transform: translate(-7px, -4px); }
+    .wikinaut-flash::after  { background: radial-gradient(circle, rgba(var(--wn-streak-a-rgb),0.45) 0%, transparent 62%); transform: translate(7px, 4px); }
 
     /* Starfield tunnel: concentric cyan/purple rings rushing forward behind the streaks. */
     .wikinaut-warp-tunnel {
@@ -963,8 +987,8 @@
       border-radius: 50%;
       background: repeating-radial-gradient(circle at 50% 50%,
         rgba(255,255,255,0) 0,
-        rgba(0,243,255,0.18) 5px,
-        rgba(189,147,249,0.16) 11px,
+        rgba(var(--wn-cyan-rgb),0.18) 5px,
+        rgba(var(--wn-purple-rgb),0.16) 11px,
         rgba(255,255,255,0) 20px);
       mix-blend-mode: screen;
       filter: blur(1px);
@@ -992,8 +1016,8 @@
       height: 24px;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      border: 3px solid rgba(160,255,255,0.9);
-      box-shadow: 0 0 26px 6px rgba(0,243,255,0.6), inset 0 0 18px rgba(255,255,255,0.7);
+      border: 3px solid rgba(var(--wn-cyan-glow-rgb),0.9);
+      box-shadow: 0 0 26px 6px rgba(var(--wn-cyan-rgb),0.6), inset 0 0 18px rgba(255,255,255,0.7);
       filter: blur(1.5px);
       opacity: 0;
       animation: wikinaut-warp-ring ${CONFIG.jumpDurationMs}ms cubic-bezier(.3,.7,.3,1) forwards;
@@ -1014,7 +1038,7 @@
       height: 13vmax;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, ${PALETTE.cyanGlow} 46%, rgba(0,243,255,0) 72%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, var(--wn-cyan-glow) 46%, rgba(var(--wn-cyan-rgb),0) 72%);
       opacity: 0;
       animation: wikinaut-warp-core ${CONFIG.jumpDurationMs}ms ease-in forwards;
     }
@@ -1034,13 +1058,13 @@
        flash/ring shapes but amber, with no chromatic split — visually distinct from a real
        jump so the player can tell a degraded hop from a normal one. */
     .wikinaut-flash-emergency {
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 10%, ${PALETTE.amber} 34%, rgba(255,184,76,0.4) 54%, transparent 76%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 10%, var(--wn-amber) 34%, rgba(var(--wn-amber-rgb),0.4) 54%, transparent 76%);
     }
     .wikinaut-flash-emergency::before,
     .wikinaut-flash-emergency::after { display: none; }
     .wikinaut-warp-ring-emergency {
       border-color: rgba(255,209,140,0.9);
-      box-shadow: 0 0 22px 5px rgba(255,184,76,0.55), inset 0 0 14px rgba(255,255,255,0.6);
+      box-shadow: 0 0 22px 5px rgba(var(--wn-amber-rgb),0.55), inset 0 0 14px rgba(255,255,255,0.6);
     }
 
     /* Camera shudder as the drive punches through (departure only). */
@@ -1088,7 +1112,7 @@
       transform: translate(-50%, -50%);
       border: 1.5px solid var(--wn-cyan);
       border-radius: 4px;
-      box-shadow: 0 0 12px rgba(0,243,255,0.55), inset 0 0 10px rgba(0,243,255,0.18);
+      box-shadow: 0 0 12px rgba(var(--wn-cyan-rgb),0.55), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.18);
       pointer-events: none;
       animation: wikinaut-reticle-lock 320ms cubic-bezier(.2,.8,.2,1) both,
                  wikinaut-reticle-pulse 1.1s ease-in-out 320ms infinite;
@@ -1110,8 +1134,8 @@
       100% { transform: translate(-50%,-50%) scale(1) rotate(0deg); opacity: 1; }
     }
     @keyframes wikinaut-reticle-pulse {
-      0%,100% { box-shadow: 0 0 8px rgba(0,243,255,0.4), inset 0 0 8px rgba(0,243,255,0.15); }
-      50%     { box-shadow: 0 0 18px rgba(0,243,255,0.75), inset 0 0 12px rgba(0,243,255,0.35); }
+      0%,100% { box-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.4), inset 0 0 8px rgba(var(--wn-cyan-rgb),0.15); }
+      50%     { box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.75), inset 0 0 12px rgba(var(--wn-cyan-rgb),0.35); }
     }
 
     .wikinaut-landing-burst {
@@ -1121,7 +1145,7 @@
       margin: -32px 0 0 -32px;
       border-radius: 50%;
       border: 2px solid var(--wn-cyan-glow);
-      box-shadow: 0 0 18px rgba(0,243,255,0.7), inset 0 0 12px rgba(0,243,255,0.4);
+      box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.7), inset 0 0 12px rgba(var(--wn-cyan-rgb),0.4);
       pointer-events: none;
       animation: wikinaut-landing-burst 620ms ease-out forwards;
     }
@@ -1136,6 +1160,9 @@
        inside a collapsed navbox/details reads as an intentional action, not the page silently
        shifting under the player. */
     .wikinaut-reveal-pulse { animation: wikinaut-reveal-pulse 900ms ease-out; }
+    /* LITERAL cyan on purpose: this class animates ARTICLE containers (navboxes the reveal
+       just expanded) — outside all three --wn-* var hosts, where var() would be invalid and
+       the pulse would vanish. */
     @keyframes wikinaut-reveal-pulse {
       0%   { box-shadow: 0 0 0 0 rgba(0,243,255,0.6); }
       40%  { box-shadow: 0 0 0 6px rgba(0,243,255,0.25); }
@@ -1154,7 +1181,7 @@
       border: 1px solid var(--wn-amber);
       border-radius: 4px;
       background: rgba(8,12,24,0.96);
-      box-shadow: 0 0 16px rgba(255,184,76,0.3);
+      box-shadow: 0 0 16px rgba(var(--wn-amber-rgb),0.3);
       color: var(--wn-amber);
       font-family: 'Rajdhani', sans-serif;
       font-size: 13px;
@@ -2116,8 +2143,10 @@
 
     // Alternate-route underlay: same x spacing per hop; each alternate rides its own stable
     // lane (`{route, lane}` pairs) with a lane-keyed color, so identity survives cycling.
-    const altColors = ['rgba(30,144,255,0.55)', 'rgba(189,147,249,0.55)', 'rgba(0,243,255,0.4)',
-      'rgba(127,196,255,0.5)', 'rgba(199,21,219,0.45)'];
+    // Built via paletteRgba (not CSS var()): these land in SVG presentation attributes,
+    // which don't resolve custom properties.
+    const altColors = [paletteRgba('blue', 0.55), paletteRgba('purple', 0.55),
+      paletteRgba('cyan', 0.4), paletteRgba('blueGlow', 0.5), paletteRgba('streakB', 0.45)];
     let altMarkup = '';
     alternates.forEach((alt) => {
       const altRoute = alt.route;
