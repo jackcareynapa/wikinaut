@@ -62,30 +62,43 @@
     journeyPortalZ: 2147483646,
   };
 
-  // Palette (retro-futuristic wireframe). Colors mirror the design spec.
-  // THE single source of truth for every branded color: each entry is emitted as a
-  // --wn-<kebab-name> CSS custom property plus a --wn-<kebab-name>-rgb channel triplet
-  // (for rgba(var(--wn-x-rgb), α) alpha variants) on all three style hosts — see the CSS
-  // var block. Restyle by editing values here, never by scattering literals.
+  // Palette — "celestial atlas in an Apollo fascia". One saturated accent (ember gold, the
+  // plotted course and every primary action), parchment for engraved labels and chart
+  // lettering, muted chart blues/violets for alternate lanes, and a signal red-orange
+  // reserved exclusively for faults. THE single source of truth for every branded color:
+  // each entry is emitted as a --wn-<kebab-name> CSS custom property plus a
+  // --wn-<kebab-name>-rgb channel triplet (for rgba(var(--wn-x-rgb), α) alpha variants) on
+  // all three style hosts — see the CSS var block. Restyle by editing values here, never by
+  // scattering literals.
   const PALETTE = {
-    bg: '#0A0F1C',
-    spaceInk: '#030812',    // deepest space fill behind the star chart / status readout
-    cyan: '#00F3FF',
-    cyanCore: '#66FFFF',
-    cyanGlow: '#A0FFFF',
-    blue: '#1E90FF',
-    blueGlow: '#7FC4FF',
-    dimWhite: '#CCCCCC',
-    purple: '#BD93F9',
-    flash: '#E0FFFF',
-    streakA: '#FF00FF',
-    streakB: '#C715DB',
-    amber: '#FFB84C',
+    bg: '#131828',          // instrument-fascia indigo charcoal
+    spaceInk: '#070B15',    // deepest space: the chart plate field and inset wells
+    accent: '#F3AE45',      // ember gold — course line, primary action, ship flame default
+    accentHot: '#FFE9C2',   // white-hot center of the accent (flare cores, key text)
+    accentGlow: '#FFCE87',  // warm phosphor — telemetry readout, focus rings
+    blue: '#5E86B8',        // muted chart blue — graticule, alternate lane
+    blueGlow: '#9FBBD9',
+    dimWhite: '#9FA8BC',    // cool secondary text on the fascia
+    parchment: '#E7DCC5',   // engraved label ivory + atlas chart lettering
+    purple: '#9B8CC9',      // slate violet — trail default, alternate lane
+    flash: '#FFF2D8',       // warm white jump flash
+    streakA: '#FFD98A',     // hyperspace streaks: pale gold…
+    streakB: '#E07A3F',     // …and deep ember
+    signal: '#FF7052',      // faults only: errors, stalled state, warnings
     // Gunmetal hull tones for the fighter craft.
     steelHi: '#C7D2E0',
     steel: '#8A97A8',
     steelDark: '#3A4453',
     steelShadow: '#1B2230',
+  };
+
+  // Type roles (system faces only — no webfont request from a userscript):
+  // label = engraved instrument lettering; mono = telemetry readouts and coordinate entry;
+  // chart = the celestial atlas's serif star names (italicized at the use site).
+  const TYPE = {
+    label: `'Avenir Next', Futura, 'Century Gothic', 'Trebuchet MS', sans-serif`,
+    mono: `ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace`,
+    chart: `Georgia, 'Iowan Old Style', 'Times New Roman', serif`,
   };
 
   // '#00F3FF' → '0,243,255' for the --wn-*-rgb channel triplets and paletteRgba below.
@@ -100,7 +113,7 @@
     return `rgba(${paletteChannels(PALETTE[name])},${alpha})`;
   }
 
-  // Every PALETTE entry as CSS custom-property declarations: --wn-cyan-core / --wn-cyan-core-rgb.
+  // Every PALETTE entry as CSS custom-property declarations: --wn-accent-hot / --wn-accent-hot-rgb.
   const PALETTE_CSS_VARS = Object.entries(PALETTE)
     .map(([name, hex]) => {
       const kebab = name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
@@ -111,7 +124,7 @@
   const SETTINGS_DEFAULTS = {
     walkingPixelsPerSecond: 550,  // must sit on the speed slider's step grid (step=50), or
                                   // the thumb snaps and disagrees with the stored value
-    travelerColor: PALETTE.cyan,
+    travelerColor: PALETTE.accent,
     trailColor: PALETTE.purple,
   };
 
@@ -132,10 +145,9 @@
 
   // ─── CSS ────────────────────────────────────────────────────────────────────
   // No web-font @import here: a CSS @import inside injected styles blocks rendering of the
-  // whole page on the font CDN. The font stacks below name Orbitron/Rajdhani first (used when
-  // locally installed) and fall through to system faces otherwise; if a display font ever
-  // becomes part of the design, load it via a non-blocking <link rel="stylesheet"> with
-  // font-display: swap — never @import.
+  // whole page on the font CDN. Typography is the TYPE role system above, built entirely on
+  // system faces; if a display font ever becomes part of the design, load it via a
+  // non-blocking <link rel="stylesheet"> with font-display: swap — never @import.
   //
   // Color policy: every branded color comes from PALETTE via var(--wn-*) / rgba(var(--wn-*-rgb), α).
   // Deliberately literal: neutral white/black highlights, the launch-flame orange ramp and
@@ -156,12 +168,15 @@
     #wikinaut-ship-shell,
     #wikinaut-jump-layer {
       ${PALETTE_CSS_VARS}
-      --wn-ship-color: ${PALETTE.cyan};
-      color: var(--wn-cyan);
-      font-family: 'Rajdhani', 'Segoe UI', system-ui, sans-serif;
+      --wn-ship-color: ${PALETTE.accent};
+      color: var(--wn-parchment);
+      font-family: ${TYPE.label};
     }
 
-    /* ── Panel (wireframe monitor) ─────────────────────────────────────── */
+    /* ── Panel — machined instrument fascia ─────────────────────────────────
+       A flat indigo-charcoal plate with a machined top highlight, real elevation
+       (shadow, not glow), and four countersunk corner screws. Engraved lettering,
+       inset wells, instrument keys. The neon-HUD scanlines/brackets are gone. */
 
     #wikinaut-panel {
       position: fixed;
@@ -174,48 +189,31 @@
       grid-template-columns: 1fr auto auto auto;
       align-items: center;
       gap: 10px 12px;
-      padding: 12px 16px;
-      background:
-        radial-gradient(120% 160% at 50% 120%, rgba(var(--wn-cyan-rgb),0.07), transparent 60%),
-        linear-gradient(180deg, #0d1426 0%, var(--wn-bg) 100%);
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.55);
-      border-radius: 8px;
+      padding: 13px 18px;
+      background: linear-gradient(180deg, #181E31 0%, var(--wn-bg) 55%, #10141F 100%);
+      border: 1px solid rgba(0,0,0,0.65);
+      border-radius: 6px;
       box-shadow:
-        0 0 0 1px rgba(var(--wn-cyan-rgb),0.08),
-        0 0 22px rgba(var(--wn-cyan-rgb),0.18),
-        inset 0 0 28px rgba(var(--wn-cyan-rgb),0.06);
-      backdrop-filter: blur(2px);
-    }
-
-    #wikinaut-panel::before {
-      /* faint scanline grid */
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: 8px;
-      pointer-events: none;
-      background-image: repeating-linear-gradient(0deg, rgba(var(--wn-cyan-rgb),0.05) 0 1px, transparent 1px 4px);
-      opacity: 0.5;
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        inset 0 0 0 1px rgba(var(--wn-parchment-rgb),0.05),
+        0 14px 38px rgba(0,0,0,0.5),
+        0 3px 10px rgba(0,0,0,0.4);
     }
 
     #wikinaut-panel::after {
-      /* HUD corner brackets (4 L-shapes) framing the console like a cockpit display */
+      /* Countersunk corner screws — the fascia is bolted onto the page. */
       content: '';
       position: absolute;
-      inset: 5px;
+      inset: 7px;
       pointer-events: none;
-      opacity: 0.75;
-      filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.45));
       background-image:
-        linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan)),
-        linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan)),
-        linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan)),
-        linear-gradient(var(--wn-cyan), var(--wn-cyan)), linear-gradient(var(--wn-cyan), var(--wn-cyan));
+        radial-gradient(circle 2.5px, rgba(var(--wn-parchment-rgb),0.30) 40%, rgba(0,0,0,0.55) 58%, transparent 70%),
+        radial-gradient(circle 2.5px, rgba(var(--wn-parchment-rgb),0.30) 40%, rgba(0,0,0,0.55) 58%, transparent 70%),
+        radial-gradient(circle 2.5px, rgba(var(--wn-parchment-rgb),0.30) 40%, rgba(0,0,0,0.55) 58%, transparent 70%),
+        radial-gradient(circle 2.5px, rgba(var(--wn-parchment-rgb),0.30) 40%, rgba(0,0,0,0.55) 58%, transparent 70%);
       background-repeat: no-repeat;
-      background-size: 15px 2px, 2px 15px, 15px 2px, 2px 15px, 15px 2px, 2px 15px, 15px 2px, 2px 15px;
-      background-position:
-        left top, left top, right top, right top,
-        left bottom, left bottom, right bottom, right bottom;
+      background-size: 6px 6px;
+      background-position: left top, right top, left bottom, right bottom;
     }
 
     #wikinaut-panel > * { position: relative; }
@@ -223,66 +221,77 @@
     .wikinaut-field { position: relative; display: flex; flex-direction: column; gap: 4px; }
 
     .wikinaut-label {
-      font-family: 'Orbitron', sans-serif;
-      font-size: 10px;
-      letter-spacing: 2px;
+      font-family: ${TYPE.label};
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.2em;
       text-transform: uppercase;
-      color: var(--wn-cyan);
-      text-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.6);
+      color: rgba(var(--wn-parchment-rgb),0.72);
+      text-shadow: 0 1px 0 rgba(0,0,0,0.7);
     }
 
     #wikinaut-target-input {
       width: 100%;
       padding: 9px 12px;
-      background: rgba(var(--wn-space-ink-rgb),0.85);
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.45);
-      border-radius: 4px;
-      color: var(--wn-cyan-glow);
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 15px;
-      letter-spacing: 0.5px;
+      background: var(--wn-space-ink);
+      border: 1px solid rgba(0,0,0,0.7);
+      border-radius: 3px;
+      color: var(--wn-parchment);
+      font-family: ${TYPE.mono};
+      font-size: 13.5px;
+      letter-spacing: 0.3px;
       outline: none;
-      transition: border-color 120ms, box-shadow 120ms;
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(var(--wn-parchment-rgb),0.06);
+      transition: box-shadow 120ms;
     }
-    #wikinaut-target-input::placeholder { color: rgba(var(--wn-cyan-rgb),0.4); }
+    #wikinaut-target-input::placeholder { color: rgba(var(--wn-dim-white-rgb),0.55); }
     #wikinaut-target-input:focus {
-      border-color: var(--wn-cyan);
-      box-shadow: 0 0 14px rgba(var(--wn-cyan-rgb),0.4), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.12);
+      box-shadow:
+        inset 0 2px 5px rgba(0,0,0,0.55),
+        inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.65),
+        0 0 0 1px rgba(var(--wn-accent-rgb),0.3);
     }
 
     .wikinaut-button {
       padding: 9px 16px;
-      border: 1px solid var(--wn-cyan);
-      border-radius: 4px;
-      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.18), rgba(var(--wn-cyan-rgb),0.05));
-      color: var(--wn-cyan-glow);
-      font-family: 'Orbitron', sans-serif;
-      font-size: 11px;
-      font-weight: 700;
-      letter-spacing: 1.5px;
+      border: 1px solid rgba(0,0,0,0.7);
+      border-radius: 3px;
+      background: linear-gradient(180deg, #222A42 0%, #171D2F 100%);
+      color: rgba(var(--wn-parchment-rgb),0.88);
+      font-family: ${TYPE.label};
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       cursor: pointer;
       white-space: nowrap;
-      text-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.5);
-      transition: box-shadow 120ms, background 120ms, transform 80ms;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 2px 4px rgba(0,0,0,0.45);
+      transition: box-shadow 120ms, background 120ms, color 120ms, transform 80ms;
     }
     .wikinaut-button:hover:not(:disabled) {
-      box-shadow: 0 0 16px rgba(var(--wn-cyan-rgb),0.5);
-      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.3), rgba(var(--wn-cyan-rgb),0.1));
+      color: var(--wn-accent-glow);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.4),
+        0 2px 4px rgba(0,0,0,0.45);
     }
-    .wikinaut-button:active:not(:disabled) { transform: translateY(1px); }
+    .wikinaut-button:active:not(:disabled) {
+      transform: translateY(1px);
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.5);
+    }
     .wikinaut-button:disabled { opacity: 0.4; cursor: not-allowed; }
     .wikinaut-button.secondary {
-      border-color: rgba(var(--wn-cyan-rgb),0.5);
-      background: rgba(var(--wn-cyan-rgb),0.04);
-      color: var(--wn-cyan);
+      background: linear-gradient(180deg, #1B2136 0%, #141927 100%);
+      color: rgba(var(--wn-dim-white-rgb),0.9);
     }
     .wikinaut-button.icon {
-      padding: 9px 11px;
-      font-size: 14px;
+      padding: 8px 10px;
+      line-height: 0;
     }
+    .wikinaut-button.icon svg { display: block; }
     .wikinaut-button.icon[aria-expanded="true"] {
-      box-shadow: 0 0 14px rgba(var(--wn-cyan-rgb),0.55);
+      color: var(--wn-accent);
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.5);
     }
 
     /* ── Autocomplete ──────────────────────────────────────────────────── */
@@ -294,132 +303,127 @@
       right: 0;
       display: none;
       flex-direction: column;
-      background: rgba(5,10,22,0.97);
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.45);
+      background: #0C111E;
+      border: 1px solid rgba(0,0,0,0.7);
       border-radius: 4px;
-      box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.25);
+      box-shadow: inset 0 0 0 1px rgba(var(--wn-parchment-rgb),0.07), 0 10px 26px rgba(0,0,0,0.55);
       overflow: hidden;
       z-index: 5;
     }
     #wikinaut-suggestions[data-open="true"] { display: flex; }
 
+    /* Destinations are encyclopedia entries — set them in the atlas serif. */
     .wikinaut-suggestion {
       padding: 8px 12px;
       border: none;
       background: transparent;
-      color: var(--wn-dim-white);
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 14px;
+      color: rgba(var(--wn-parchment-rgb),0.85);
+      font-family: ${TYPE.chart};
+      font-size: 13.5px;
       text-align: left;
       cursor: pointer;
-      border-bottom: 1px solid rgba(var(--wn-cyan-rgb),0.12);
+      border-bottom: 1px solid rgba(var(--wn-parchment-rgb),0.08);
     }
     .wikinaut-suggestion:last-child { border-bottom: none; }
     .wikinaut-suggestion:hover,
     .wikinaut-suggestion:focus {
-      background: rgba(var(--wn-cyan-rgb),0.12);
-      color: var(--wn-cyan-glow);
+      background: rgba(var(--wn-accent-rgb),0.14);
+      color: var(--wn-accent-hot);
       outline: none;
     }
 
     #wikinaut-input-hint {
       min-height: 12px;
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 11px;
-      letter-spacing: 0.4px;
+      font-family: ${TYPE.label};
+      font-size: 9.5px;
+      letter-spacing: 0.08em;
       line-height: 1.1;
-      color: var(--wn-amber);
+      color: var(--wn-signal);
       opacity: 0;
       transition: opacity 140ms ease;
     }
     #wikinaut-input-hint[data-state="warn"] { opacity: 0.95; }
 
-    /* ── Route card / star map ─────────────────────────────────────────── */
+    /* ── Route card — the atlas plate ────────────────────────────────────
+       The signature surface: a celestial-chart plate inset into the fascia. Double
+       hairline frame like an engraved atlas border, a static warm star field, gold
+       voyage line, serif star names. Paper doesn't drift: the plate is static. */
 
     #wikinaut-route-card {
       grid-column: 1 / -1;
       position: relative;
       padding: 10px 12px 8px;
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.25);
-      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,0.75);
+      border-radius: 4px;
       background:
         radial-gradient(1px 1px at 20% 30%, rgba(255,255,255,0.5), transparent),
-        radial-gradient(1px 1px at 70% 60%, rgba(var(--wn-cyan-rgb),0.6), transparent),
-        radial-gradient(1px 1px at 45% 80%, rgba(var(--wn-purple-rgb),0.5), transparent),
+        radial-gradient(1px 1px at 70% 60%, rgba(var(--wn-accent-glow-rgb),0.55), transparent),
+        radial-gradient(1px 1px at 45% 80%, rgba(var(--wn-blue-glow-rgb),0.45), transparent),
         radial-gradient(1px 1px at 88% 25%, rgba(255,255,255,0.4), transparent),
-        linear-gradient(180deg, rgba(var(--wn-space-ink-rgb),0.7), rgba(var(--wn-space-ink-rgb),0.95));
+        var(--wn-space-ink);
       background-size: 200px 100px, 240px 120px, 180px 90px, 220px 110px, 100% 100%;
+      box-shadow:
+        inset 0 2px 8px rgba(0,0,0,0.6),
+        inset 0 0 0 1px rgba(var(--wn-parchment-rgb),0.10),
+        inset 0 0 0 4px var(--wn-space-ink),
+        inset 0 0 0 5px rgba(var(--wn-parchment-rgb),0.06);
       overflow: hidden;
     }
 
-    /* The star-field drift (and the current-waypoint pulse below) run ONLY while a course is
-       actually in play — an idle console on every article page must schedule zero animation
-       work (the drift alone kept a compositor layer repainting forever). */
-    #wikinaut-panel:is([data-phase="plotting"], [data-phase="course-ready"],
-        [data-phase="countdown"], [data-phase="launching"], [data-phase="flying"],
-        [data-phase="arrived"]) #wikinaut-route-card {
-      animation: wikinaut-drift 60s linear infinite;
-    }
-
-    @keyframes wikinaut-drift {
-      from { background-position: 0 0, 0 0, 0 0, 0 0, 0 0; }
-      to   { background-position: -200px 40px, 240px -60px, -180px 50px, 220px -40px, 0 0; }
-    }
-
+    /* Telemetry readout: amber phosphor over the plate's top edge. */
     #wikinaut-status {
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 13px;
-      letter-spacing: 0.4px;
-      color: var(--wn-cyan-glow);
+      font-family: ${TYPE.mono};
+      font-size: 11.5px;
+      letter-spacing: 0.02em;
+      color: var(--wn-accent-glow);
       margin-bottom: 6px;
     }
-    /* Errors get a distinct amber look so they read differently from routine progress text. */
-    #wikinaut-status[data-error="true"] {
-      color: var(--wn-amber);
-      text-shadow: 0 0 8px rgba(var(--wn-amber-rgb),0.5);
-    }
+    /* Faults switch the readout to the signal color — nothing else on the console is red. */
+    #wikinaut-status[data-error="true"] { color: var(--wn-signal); }
     #wikinaut-status[data-error="true"]::before { content: '⚠ '; }
 
     /* Coarse phase accents on the panel frame (data-phase is the single source of truth for
        "where are we in the flight loop"; data-launch/data-jumping/data-flying below are the
        finer per-beat FX timing set alongside phase transitions by their owning callers). */
-    #wikinaut-panel[data-phase="plotting"] {
-      animation: wikinaut-plotting-scan 1.6s ease-in-out infinite;
+    #wikinaut-panel[data-phase="plotting"] #wikinaut-status {
+      animation: wikinaut-plotting-scan 1.1s ease-in-out infinite;
     }
     @keyframes wikinaut-plotting-scan {
-      0%,100% { box-shadow: 0 0 0 1px rgba(var(--wn-cyan-rgb),0.08), 0 0 22px rgba(var(--wn-cyan-rgb),0.18), inset 0 0 28px rgba(var(--wn-cyan-rgb),0.06); }
-      50%     { box-shadow: 0 0 0 1px rgba(var(--wn-cyan-rgb),0.16), 0 0 30px rgba(var(--wn-cyan-rgb),0.32), inset 0 0 34px rgba(var(--wn-cyan-rgb),0.12); }
+      0%,100% { opacity: 1; }
+      50%     { opacity: 0.45; }
     }
     #wikinaut-panel[data-phase="stalled"] {
-      border-color: rgba(var(--wn-amber-rgb),0.65);
+      border-color: rgba(var(--wn-signal-rgb),0.6);
       box-shadow:
-        0 0 0 1px rgba(var(--wn-amber-rgb),0.12),
-        0 0 22px rgba(var(--wn-amber-rgb),0.25),
-        inset 0 0 28px rgba(var(--wn-amber-rgb),0.08);
+        inset 0 1px 0 rgba(255,255,255,0.08),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.35),
+        0 14px 38px rgba(0,0,0,0.5),
+        0 3px 10px rgba(0,0,0,0.4);
     }
 
-    /* Launch computer emphasis: once a course is charted, LAUNCH becomes unmistakably the
-       next action — bright fill, steady glow, slow "ready" pulse — while CHART COURSE drops
-       back to the quiet secondary look. Driven purely by the phase machine (data-phase);
-       no class swapping in JS. The static box-shadow keeps the emphasis when the pulse is
-       silenced under reduced motion. */
+    /* Launch key emphasis: once a course is charted, LAUNCH becomes a solid gold commit
+       key — dark engraved text on an ember-gold cap, the one saturated element on the
+       fascia — while CHART COURSE drops back to the quiet secondary look. Driven purely
+       by the phase machine (data-phase); no class swapping in JS. The static styling keeps
+       the emphasis when the pulse is silenced under reduced motion. */
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button:not(:disabled) {
-      border-color: var(--wn-cyan);
-      background: linear-gradient(180deg, rgba(var(--wn-cyan-rgb),0.55), rgba(var(--wn-cyan-rgb),0.22));
-      color: #eaffff;
-      text-shadow: 0 0 10px rgba(var(--wn-flash-rgb),0.9);
-      box-shadow: 0 0 16px rgba(var(--wn-cyan-rgb),0.6), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.3);
-      animation: wikinaut-launch-ready 1.6s ease-in-out infinite;
+      background: linear-gradient(180deg, #FFC873 0%, var(--wn-accent) 60%, #D9932F 100%);
+      color: #171A26;
+      font-weight: 700;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.5),
+        0 2px 6px rgba(0,0,0,0.5),
+        0 0 14px rgba(var(--wn-accent-rgb),0.35);
+      animation: wikinaut-launch-ready 1.8s ease-in-out infinite;
     }
     @keyframes wikinaut-launch-ready {
-      0%,100% { box-shadow: 0 0 10px rgba(var(--wn-cyan-rgb),0.45), inset 0 0 8px rgba(var(--wn-cyan-rgb),0.25); }
-      50%     { box-shadow: 0 0 26px rgba(var(--wn-cyan-rgb),0.9), inset 0 0 14px rgba(var(--wn-cyan-rgb),0.45); }
+      0%,100% { box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(0,0,0,0.5), 0 0 10px rgba(var(--wn-accent-rgb),0.25); }
+      50%     { box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(0,0,0,0.5), 0 0 22px rgba(var(--wn-accent-rgb),0.55); }
     }
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-chart-button {
-      border-color: rgba(var(--wn-cyan-rgb),0.35);
-      background: rgba(var(--wn-cyan-rgb),0.04);
-      color: var(--wn-cyan);
-      text-shadow: none;
+      background: linear-gradient(180deg, #1B2136 0%, #141927 100%);
+      color: rgba(var(--wn-dim-white-rgb),0.9);
     }
 
     /* Route pager: floats top-right of the route card whenever several equally-short routes
@@ -436,14 +440,16 @@
     }
     #wikinaut-route-pager[hidden] { display: none; }
     #wikinaut-route-prev, #wikinaut-route-next {
-      padding: 3px 7px;
-      font-size: 9px;
-      line-height: 1;
+      padding: 3px 6px;
+      line-height: 0;
     }
+    #wikinaut-route-prev svg, #wikinaut-route-next svg { display: block; }
     #wikinaut-route-label {
-      font-size: 9px;
-      letter-spacing: 1px;
-      color: var(--wn-cyan);
+      font-family: ${TYPE.label};
+      font-size: 8.5px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
+      color: rgba(var(--wn-parchment-rgb),0.75);
       text-transform: uppercase;
       white-space: nowrap;
     }
@@ -478,25 +484,27 @@
     }
     #wikinaut-starchart { display: block; width: 100%; height: 176px; }
 
-    .wikinaut-chart-grid line { stroke: rgba(var(--wn-cyan-rgb),0.10); stroke-width: 0.5; }
-    .wikinaut-chart-ring { fill: none; stroke: rgba(var(--wn-cyan-rgb),0.13); stroke-width: 0.6; }
-    .wikinaut-chart-star { fill: #fff; }
+    /* Graticule: hairline chart-blue rings and meridians, like an atlas plate's grid. */
+    .wikinaut-chart-grid line { stroke: rgba(var(--wn-blue-rgb),0.22); stroke-width: 0.4; }
+    .wikinaut-chart-ring { fill: none; stroke: rgba(var(--wn-blue-rgb),0.26); stroke-width: 0.5; }
+    .wikinaut-chart-tick { stroke: rgba(var(--wn-blue-rgb),0.35); stroke-width: 0.6; }
+    .wikinaut-chart-star { fill: #FFF6E4; }
 
-    /* Dotted plotted track (static) with a glowing line drawn on top (animated). */
+    /* The voyage line: a dotted survey track with the plotted course inked in gold on top. */
     #wikinaut-route-track {
       fill: none;
-      stroke: rgba(var(--wn-cyan-rgb),0.28);
-      stroke-width: 1.4;
+      stroke: rgba(var(--wn-accent-rgb),0.30);
+      stroke-width: 1.2;
       stroke-linecap: round;
-      stroke-dasharray: 0.5 6;
+      stroke-dasharray: 0.5 5;
     }
     #wikinaut-route-path {
       fill: none;
-      stroke: var(--wn-cyan);
-      stroke-width: 1.6;
+      stroke: var(--wn-accent);
+      stroke-width: 1.4;
       stroke-linecap: round;
       stroke-linejoin: round;
-      filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.6)) drop-shadow(0 0 9px rgba(var(--wn-cyan-rgb),0.35));
+      filter: drop-shadow(0 0 3px rgba(var(--wn-accent-rgb),0.45));
     }
 
     .wikinaut-wp {
@@ -507,47 +515,52 @@
       animation: wikinaut-wp-pop 380ms cubic-bezier(.2,.8,.2,1) forwards;
       animation-delay: var(--d, 0ms);
     }
-    .wikinaut-wp-node { fill: rgba(var(--wn-space-ink-rgb),0.9); stroke: rgba(var(--wn-cyan-rgb),0.5); stroke-width: 1.2; }
-    .wikinaut-wp-core { fill: var(--wn-dim-white); }
+    .wikinaut-wp-node { fill: var(--wn-space-ink); stroke: rgba(var(--wn-parchment-rgb),0.55); stroke-width: 1; }
+    .wikinaut-wp-core { fill: rgba(var(--wn-parchment-rgb),0.85); }
+    /* Star names in the atlas serif, italicized — the chart's signature lettering. */
     .wikinaut-wp-label {
-      fill: var(--wn-dim-white);
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 9px;
+      fill: rgba(var(--wn-parchment-rgb),0.78);
+      font-family: ${TYPE.chart};
+      font-style: italic;
+      font-size: 8.5px;
       letter-spacing: 0.2px;
     }
-    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-cyan); }
+    .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-accent); }
     #wikinaut-panel:is([data-phase="plotting"], [data-phase="course-ready"],
         [data-phase="countdown"], [data-phase="launching"], [data-phase="flying"],
         [data-phase="arrived"]) .wikinaut-wp.current .wikinaut-wp-node {
       animation: wikinaut-wp-pulse 1.8s ease-in-out infinite;
     }
-    .wikinaut-wp.current .wikinaut-wp-core { fill: var(--wn-cyan); }
+    .wikinaut-wp.current .wikinaut-wp-core { fill: var(--wn-accent); }
     @keyframes wikinaut-wp-pulse {
-      0%,100% { filter: drop-shadow(0 0 4px rgba(var(--wn-cyan-rgb),0.5)); }
-      50%     { filter: drop-shadow(0 0 10px rgba(var(--wn-cyan-rgb),0.95)); }
+      0%,100% { filter: drop-shadow(0 0 3px rgba(var(--wn-accent-rgb),0.4)); }
+      50%     { filter: drop-shadow(0 0 8px rgba(var(--wn-accent-rgb),0.9)); }
     }
-    .wikinaut-wp.current .wikinaut-wp-label { fill: var(--wn-cyan-glow); }
-    .wikinaut-wp.next .wikinaut-wp-node { stroke: var(--wn-purple); }
-    .wikinaut-wp.next .wikinaut-wp-core { fill: var(--wn-purple); }
-    .wikinaut-wp.next .wikinaut-wp-label { fill: #e9ddff; }
-    .wikinaut-wp.dest .wikinaut-wp-node { stroke: var(--wn-amber); }
-    .wikinaut-wp.dest .wikinaut-wp-core { fill: var(--wn-amber); }
+    .wikinaut-wp.current .wikinaut-wp-label { fill: var(--wn-accent-glow); }
+    .wikinaut-wp.next .wikinaut-wp-node { stroke: var(--wn-blue-glow); }
+    .wikinaut-wp.next .wikinaut-wp-core { fill: var(--wn-blue-glow); }
+    .wikinaut-wp.next .wikinaut-wp-label { fill: var(--wn-blue-glow); }
+    /* The destination is the brightest star on the plate. */
+    .wikinaut-wp.dest .wikinaut-wp-node { stroke: var(--wn-accent); stroke-width: 1.4; }
+    .wikinaut-wp.dest .wikinaut-wp-core { fill: var(--wn-accent-hot); }
 
     @keyframes wikinaut-wp-pop {
       from { opacity: 0; transform: scale(0.3); }
       to   { opacity: 1; transform: scale(1); }
     }
 
+    /* Atlas imprint line — the plate's publication cartouche. */
     #wikinaut-freshness {
       margin-top: 5px;
-      font-family: 'Orbitron', sans-serif;
-      font-size: 9px;
-      letter-spacing: 1.5px;
+      font-family: ${TYPE.label};
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.22em;
       text-transform: uppercase;
-      color: rgba(var(--wn-cyan-rgb),0.55);
+      color: rgba(var(--wn-parchment-rgb),0.42);
     }
 
-    /* ── Launch sequence (spaceport gantry + bay doors + exhaust + smoke + shake) ── */
+    /* ── Launch sequence (spaceport gantry + bay doors + smoke + shake) ── */
 
     #wikinaut-launchpad {
       position: absolute;
@@ -570,11 +583,12 @@
       transform-origin: 50% 100%;
       transition: transform 460ms cubic-bezier(.2,.8,.2,1);
     }
+    /* Steel service tower, not a neon hologram. */
     .wikinaut-gantry line {
-      stroke: rgba(var(--wn-cyan-rgb),0.7);
+      stroke: rgba(var(--wn-steel-hi-rgb),0.75);
       stroke-width: 2;
       stroke-linecap: round;
-      filter: drop-shadow(0 0 3px rgba(var(--wn-cyan-rgb),0.6));
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
     }
     #wikinaut-panel[data-launch="arming"] .wikinaut-gantry,
     #wikinaut-panel[data-launch="launch"] .wikinaut-gantry { transform: scaleY(1); }
@@ -592,7 +606,7 @@
       width: 46%;
       height: 8px;
       background: linear-gradient(180deg, var(--wn-steel), var(--wn-steel-dark));
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.5);
+      border: 1px solid rgba(var(--wn-accent-rgb),0.5);
       transition: transform 380ms ease;
     }
     .wikinaut-baydoor.left { left: 4%; }
@@ -602,34 +616,8 @@
     #wikinaut-panel[data-launch="arming"] .wikinaut-baydoor.right,
     #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.right { transform: translateX(94%); }
 
-    /* Ground-effect bloom kicked up at the pad on ignition. The ship now carries its own
-       flame (see .wikinaut-ship-flame), so this is a one-shot blast left behind, not a column. */
-    .wikinaut-exhaust {
-      position: absolute;
-      left: 50%;
-      bottom: 0;
-      width: 76px;
-      height: 30px;
-      transform: translateX(-50%) scale(0.3);
-      transform-origin: 50% 100%;
-      background: radial-gradient(ellipse at 50% 100%,
-        rgba(255,255,255,0.95) 0%,
-        rgba(255,236,150,0.85) 22%,
-        rgba(255,150,40,0.7) 46%,
-        rgba(255,70,20,0.32) 70%,
-        transparent 82%);
-      border-radius: 50%;
-      filter: blur(3px) drop-shadow(0 0 16px rgba(255,150,40,0.85));
-      opacity: 0;
-    }
-    #wikinaut-panel[data-launch="launch"] .wikinaut-exhaust {
-      animation: wikinaut-ground-bloom 900ms ease-out forwards;
-    }
-    @keyframes wikinaut-ground-bloom {
-      0%   { opacity: 0; transform: translateX(-50%) scale(0.3); }
-      18%  { opacity: 1; transform: translateX(-50%) scale(1.15); }
-      100% { opacity: 0; transform: translateX(-50%) scale(1.6); }
-    }
+    /* (The old pad-level exhaust bloom is gone — the ship's own launch torch plus the
+       ignition flash below carry the blast; the pad keeps its smoke.) */
 
     /* Billowing smoke clouds at the pad. */
     .wikinaut-smoke { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; }
@@ -657,11 +645,11 @@
       display: none;
       align-items: center;
       justify-content: center;
-      font-family: 'Orbitron', sans-serif;
-      font-size: 64px;
-      font-weight: 800;
-      color: var(--wn-cyan-glow);
-      text-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.85);
+      font-family: ${TYPE.mono};
+      font-size: 60px;
+      font-weight: 700;
+      color: var(--wn-accent-hot);
+      text-shadow: 0 0 18px rgba(var(--wn-accent-rgb),0.8);
       pointer-events: none;
       z-index: 3;
     }
@@ -701,18 +689,15 @@
     }
     .wikinaut-shockwave {
       position: fixed;
-      width: 40px; height: 40px;
-      margin: -20px 0 0 -20px;
+      width: 176px; height: 176px;
+      margin: -88px 0 0 -88px;
       border-radius: 50%;
       border: 2px solid rgba(255,210,140,0.9);
       box-shadow: 0 0 18px rgba(255,170,70,0.7);
       pointer-events: none;
       z-index: 2147483005;
-      animation: wikinaut-shockwave 640ms cubic-bezier(.2,.7,.3,1) forwards;
-    }
-    @keyframes wikinaut-shockwave {
-      0%   { transform: scale(0.2); opacity: 0.9; }
-      100% { transform: scale(4.4); opacity: 0; }
+      /* Same expanding-ring curve as a touchdown burst — element size sets the reach. */
+      animation: wikinaut-landing-burst 640ms cubic-bezier(.2,.7,.3,1) forwards;
     }
 
     /* ── Settings drawer ───────────────────────────────────────────────── */
@@ -724,39 +709,41 @@
       align-items: center;
       gap: 10px 14px;
       padding: 10px 12px;
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.25);
-      border-radius: 6px;
-      background: rgba(var(--wn-space-ink-rgb),0.85);
+      border: 1px solid rgba(0,0,0,0.7);
+      border-radius: 4px;
+      background: var(--wn-space-ink);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--wn-parchment-rgb),0.06);
     }
     #wikinaut-settings-section[hidden] { display: none; }
 
     .wikinaut-settings-row { display: contents; }
     .wikinaut-settings-label {
-      font-family: 'Orbitron', sans-serif;
-      font-size: 10px;
-      letter-spacing: 1.5px;
+      font-family: ${TYPE.label};
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: var(--wn-cyan);
+      color: rgba(var(--wn-parchment-rgb),0.72);
     }
-    .wikinaut-settings-value { font-size: 12px; color: var(--wn-dim-white); }
-    .wikinaut-range { width: 100%; accent-color: var(--wn-cyan); }
+    .wikinaut-settings-value { font-family: ${TYPE.mono}; font-size: 11px; color: var(--wn-accent-glow); }
+    .wikinaut-range { width: 100%; accent-color: var(--wn-accent); }
     .wikinaut-color-input {
       width: 40px; height: 24px; padding: 0;
-      background: transparent; border: 1px solid rgba(var(--wn-cyan-rgb),0.4); border-radius: 3px;
+      background: transparent; border: 1px solid rgba(var(--wn-parchment-rgb),0.3); border-radius: 3px;
       cursor: pointer;
     }
     #wikinaut-backend-input {
       grid-column: 2 / -1;
       padding: 7px 10px;
-      background: rgba(var(--wn-space-ink-rgb),0.9);
-      border: 1px solid rgba(var(--wn-cyan-rgb),0.4);
-      border-radius: 4px;
-      color: var(--wn-cyan-glow);
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 13px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(var(--wn-parchment-rgb),0.14);
+      border-radius: 3px;
+      color: var(--wn-parchment);
+      font-family: ${TYPE.mono};
+      font-size: 12px;
       outline: none;
     }
-    #wikinaut-backend-input:focus { border-color: var(--wn-cyan); box-shadow: 0 0 10px rgba(var(--wn-cyan-rgb),0.35); }
+    #wikinaut-backend-input:focus { border-color: rgba(var(--wn-accent-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--wn-accent-rgb),0.3); }
     #wikinaut-settings-reset { grid-column: 1 / -1; justify-self: start; }
 
     /* ── Ship ──────────────────────────────────────────────────────────── */
@@ -784,12 +771,12 @@
       position: absolute;
       inset: -45%;
       border-radius: 50%;
-      background: radial-gradient(circle, rgba(var(--wn-cyan-rgb),0.30), rgba(var(--wn-cyan-rgb),0.10) 46%, transparent 70%);
+      background: radial-gradient(circle, rgba(var(--wn-accent-rgb),0.30), rgba(var(--wn-accent-rgb),0.10) 46%, transparent 70%);
       pointer-events: none;
       z-index: -1;
     }
     /* Cyan rim-glow on the whole hull (doesn't fight the animated core/body filters). */
-    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 5px rgba(var(--wn-cyan-rgb),0.55)); }
+    #wikinaut-ship-shell svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 5px rgba(var(--wn-accent-rgb),0.55)); }
 
     /* Gunmetal fighter: metallic hull, tinted canopy, glowing blue engine. */
     .wikinaut-ship-hull {
@@ -838,10 +825,10 @@
     /* Plume + glow tint follow the Ship color setting (white-hot core and launch-orange
        mid stay fixed); fallbacks guard against the shell ever losing its var host again. */
     .wikinaut-ship-flame-plume {
-      fill: var(--wn-ship-color, ${PALETTE.cyan});
-      filter: drop-shadow(0 0 5px var(--wn-ship-color, ${PALETTE.cyan}));
+      fill: var(--wn-ship-color, ${PALETTE.accent});
+      filter: drop-shadow(0 0 5px var(--wn-ship-color, ${PALETTE.accent}));
     }
-    .wikinaut-flame-glow-tint { stop-color: var(--wn-ship-color, ${PALETTE.cyan}); }
+    .wikinaut-flame-glow-tint { stop-color: var(--wn-ship-color, ${PALETTE.accent}); }
     .wikinaut-ship-flame-mid   { fill: #FF9A3C; opacity: 0; }
     .wikinaut-ship-flame-core  { fill: #FFFFFF; }
     /* Cruise thrust: cyan flame, fast flicker (no orange). */
@@ -859,27 +846,21 @@
     }
 
     .wikinaut-ship-body { transform-origin: 50% 50%; }
-    #wikinaut-ship-shell[data-pose="idle"] .wikinaut-ship-body { animation: wikinaut-hover 2.2s ease-in-out infinite; }
-    #wikinaut-ship-shell[data-pose="walking"] .wikinaut-ship-thruster,
-    #wikinaut-ship-shell[data-pose="push"] .wikinaut-ship-thruster { animation: wikinaut-thrust 220ms steps(2) infinite; }
-    #wikinaut-ship-shell[data-pose="look"] .wikinaut-ship-body,
-    #wikinaut-ship-shell[data-pose="look-out"] .wikinaut-ship-body { animation: wikinaut-scan 1.6s ease-in-out infinite; }
-    #wikinaut-ship-shell[data-pose="grab"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="tug"] .wikinaut-ship-core { animation: wikinaut-charge 0.5s ease-in-out infinite alternate; }
-    #wikinaut-ship-shell[data-pose="timid"] .wikinaut-ship-body { animation: wikinaut-charge 0.3s ease-in-out infinite alternate; }
     #wikinaut-ship-shell[data-pose="victory"] .wikinaut-ship-body { animation: wikinaut-orbit 2.4s linear infinite; }
-    /* Gentle engine-glow pulse while idling on the pad or holding a lock at a link. */
+    /* One engine-glow pulse covers every "holding" beat: idling, holding a lock at a link,
+       and charging the jump drive (faster while charging). The old per-pose hover/scan/
+       thrust/charge keyframes are gone — the flame flicker carries engine life. */
     #wikinaut-ship-shell[data-pose="idle"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="look"] .wikinaut-ship-core { animation: wikinaut-core-pulse 2.4s ease-in-out infinite; }
+    #wikinaut-ship-shell[data-pose="look"] .wikinaut-ship-core,
+    #wikinaut-ship-shell[data-pose="look-out"] .wikinaut-ship-core { animation: wikinaut-core-pulse 2.4s ease-in-out infinite; }
+    #wikinaut-ship-shell[data-pose="grab"] .wikinaut-ship-core,
+    #wikinaut-ship-shell[data-pose="tug"] .wikinaut-ship-core,
+    #wikinaut-ship-shell[data-pose="timid"] .wikinaut-ship-core { animation: wikinaut-core-pulse 0.55s ease-in-out infinite; }
     @keyframes wikinaut-core-pulse {
       0%,100% { filter: drop-shadow(0 0 4px var(--wn-ship-color, ${PALETTE.blue})); }
-      50%     { filter: drop-shadow(0 0 11px var(--wn-cyan-glow)); }
+      50%     { filter: drop-shadow(0 0 11px var(--wn-accent-glow)); }
     }
 
-    @keyframes wikinaut-hover { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
-    @keyframes wikinaut-thrust { from { opacity: 0.3; } to { opacity: 1; } }
-    @keyframes wikinaut-scan { 0%,100% { transform: rotate(-3deg); } 50% { transform: rotate(3deg); } }
-    @keyframes wikinaut-charge { from { filter: drop-shadow(0 0 4px var(--wn-cyan-core)); } to { filter: drop-shadow(0 0 12px var(--wn-flash)); } }
     @keyframes wikinaut-orbit { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
     /* ── Trail canvas ──────────────────────────────────────────────────── */
@@ -910,11 +891,12 @@
       transform: translate(-50%, -50%);
       animation: wikinaut-warp-zoom ${CONFIG.jumpDurationMs}ms cubic-bezier(.55,0,.85,.5) forwards;
     }
+    /* Arrivals replay the departure keyframes in reverse (animation-direction) — one
+       keyframe per effect instead of a hand-tuned "-in" twin for each. */
     .wikinaut-warp[data-mode="arrive"] {
-      animation: wikinaut-warp-zoom-in ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) forwards;
+      animation: wikinaut-warp-zoom ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-warp-zoom { 0% { transform: translate(-50%,-50%) scale(0.6); } 100% { transform: translate(-50%,-50%) scale(1.5); } }
-    @keyframes wikinaut-warp-zoom-in { 0% { transform: translate(-50%,-50%) scale(1.6); } 100% { transform: translate(-50%,-50%) scale(1); } }
 
     .wikinaut-warp-streak {
       position: absolute;
@@ -924,22 +906,17 @@
       width: 2px;
       transform-origin: 0 50%;
       border-radius: 2px;
-      background: linear-gradient(90deg, #ffffff, var(--wn-cyan-glow) 22%, var(--wn-cyan) 44%, var(--wn-streak-a) 72%, transparent);
+      background: linear-gradient(90deg, #ffffff, var(--wn-accent-glow) 22%, var(--wn-accent) 44%, var(--wn-streak-a) 72%, transparent);
       box-shadow: 0 0 12px var(--wn-streak-b), 0 0 4px #ffffff;
       animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.5,0,.85,.5) forwards;
     }
     .wikinaut-warp[data-mode="arrive"] .wikinaut-warp-streak {
-      animation: wikinaut-streak-in ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) forwards;
+      animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-streak {
       0%   { width: 4px; opacity: 0; }
       12%  { opacity: 1; }
       100% { width: 150vmax; opacity: 0; }
-    }
-    @keyframes wikinaut-streak-in {
-      0%   { width: 150vmax; opacity: 0; }
-      30%  { opacity: 1; }
-      100% { width: 4px; opacity: 0; }
     }
 
     .wikinaut-flash {
@@ -950,19 +927,15 @@
       height: 40vmax;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, var(--wn-cyan-glow) 34%, rgba(var(--wn-cyan-rgb),0.5) 54%, transparent 76%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, var(--wn-accent-glow) 34%, rgba(var(--wn-accent-rgb),0.5) 54%, transparent 76%);
       opacity: 0;
       animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
     }
-    .wikinaut-flash[data-mode="arrive"] { animation: wikinaut-flash-in ${CONFIG.jumpDurationMs}ms ease-out forwards; }
+    .wikinaut-flash[data-mode="arrive"] { animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-out reverse forwards; }
     @keyframes wikinaut-flash {
       0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
       70%  { opacity: 0.6; }
       100% { opacity: 1; transform: translate(-50%,-50%) scale(1.1); }
-    }
-    @keyframes wikinaut-flash-in {
-      0%   { opacity: 1; transform: translate(-50%,-50%) scale(1.1); }
-      100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
     }
     /* Chromatic aberration: cyan + magenta fringes offset a few px, screened over the flash. */
     .wikinaut-flash::before, .wikinaut-flash::after {
@@ -973,7 +946,7 @@
       mix-blend-mode: screen;
       opacity: 0.55;
     }
-    .wikinaut-flash::before { background: radial-gradient(circle, rgba(var(--wn-cyan-rgb),0.5) 0%, transparent 62%); transform: translate(-7px, -4px); }
+    .wikinaut-flash::before { background: radial-gradient(circle, rgba(var(--wn-accent-rgb),0.5) 0%, transparent 62%); transform: translate(-7px, -4px); }
     .wikinaut-flash::after  { background: radial-gradient(circle, rgba(var(--wn-streak-a-rgb),0.45) 0%, transparent 62%); transform: translate(7px, 4px); }
 
     /* Starfield tunnel: concentric cyan/purple rings rushing forward behind the streaks. */
@@ -987,7 +960,7 @@
       border-radius: 50%;
       background: repeating-radial-gradient(circle at 50% 50%,
         rgba(255,255,255,0) 0,
-        rgba(var(--wn-cyan-rgb),0.18) 5px,
+        rgba(var(--wn-accent-rgb),0.18) 5px,
         rgba(var(--wn-purple-rgb),0.16) 11px,
         rgba(255,255,255,0) 20px);
       mix-blend-mode: screen;
@@ -995,16 +968,11 @@
       opacity: 0;
       animation: wikinaut-warp-tunnel ${CONFIG.jumpDurationMs}ms cubic-bezier(.55,0,.85,.5) forwards;
     }
-    .wikinaut-warp-tunnel[data-mode="arrive"] { animation: wikinaut-warp-tunnel-in ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) forwards; }
+    .wikinaut-warp-tunnel[data-mode="arrive"] { animation: wikinaut-warp-tunnel ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards; }
     @keyframes wikinaut-warp-tunnel {
       0%   { opacity: 0; transform: translate(-50%,-50%) scale(0.2) rotate(0deg); }
       25%  { opacity: 0.9; }
       100% { opacity: 0; transform: translate(-50%,-50%) scale(2.6) rotate(42deg); }
-    }
-    @keyframes wikinaut-warp-tunnel-in {
-      0%   { opacity: 0; transform: translate(-50%,-50%) scale(2.6) rotate(-42deg); }
-      35%  { opacity: 0.9; }
-      100% { opacity: 0; transform: translate(-50%,-50%) scale(0.2) rotate(0deg); }
     }
 
     /* Expanding motion-blur shock ring from the jump point. */
@@ -1016,8 +984,8 @@
       height: 24px;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      border: 3px solid rgba(var(--wn-cyan-glow-rgb),0.9);
-      box-shadow: 0 0 26px 6px rgba(var(--wn-cyan-rgb),0.6), inset 0 0 18px rgba(255,255,255,0.7);
+      border: 3px solid rgba(var(--wn-accent-glow-rgb),0.9);
+      box-shadow: 0 0 26px 6px rgba(var(--wn-accent-rgb),0.6), inset 0 0 18px rgba(255,255,255,0.7);
       filter: blur(1.5px);
       opacity: 0;
       animation: wikinaut-warp-ring ${CONFIG.jumpDurationMs}ms cubic-bezier(.3,.7,.3,1) forwards;
@@ -1038,62 +1006,40 @@
       height: 13vmax;
       transform: translate(-50%, -50%) scale(0);
       border-radius: 50%;
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, var(--wn-cyan-glow) 46%, rgba(var(--wn-cyan-rgb),0) 72%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, var(--wn-accent-glow) 46%, rgba(var(--wn-accent-rgb),0) 72%);
       opacity: 0;
-      animation: wikinaut-warp-core ${CONFIG.jumpDurationMs}ms ease-in forwards;
+      /* Reuses the flash bloom curve — same shape family, no dedicated keyframe. */
+      animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
     }
-    .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-warp-core-in ${CONFIG.jumpDurationMs}ms ease-out forwards; }
-    @keyframes wikinaut-warp-core {
-      0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
-      60%  { opacity: 1; }
-      100% { opacity: 1; transform: translate(-50%,-50%) scale(1.5); }
-    }
-    @keyframes wikinaut-warp-core-in {
-      0%   { opacity: 1; transform: translate(-50%,-50%) scale(1.5); }
-      100% { opacity: 0; transform: translate(-50%,-50%) scale(0); }
-    }
+    .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-out reverse forwards; }
 
     /* Degraded jump: the link couldn't be found on the live page, so the ship blinks out from
        its current position and the flight continues via a direct URL navigation. Reuses the
        flash/ring shapes but amber, with no chromatic split — visually distinct from a real
        jump so the player can tell a degraded hop from a normal one. */
     .wikinaut-flash-emergency {
-      background: radial-gradient(circle, #ffffff 0%, #ffffff 10%, var(--wn-amber) 34%, rgba(var(--wn-amber-rgb),0.4) 54%, transparent 76%);
+      background: radial-gradient(circle, #ffffff 0%, #ffffff 10%, var(--wn-signal) 34%, rgba(var(--wn-signal-rgb),0.4) 54%, transparent 76%);
     }
     .wikinaut-flash-emergency::before,
     .wikinaut-flash-emergency::after { display: none; }
     .wikinaut-warp-ring-emergency {
       border-color: rgba(255,209,140,0.9);
-      box-shadow: 0 0 22px 5px rgba(var(--wn-amber-rgb),0.55), inset 0 0 14px rgba(255,255,255,0.6);
+      box-shadow: 0 0 22px 5px rgba(var(--wn-signal-rgb),0.55), inset 0 0 14px rgba(255,255,255,0.6);
     }
 
-    /* Camera shudder as the drive punches through (departure only). */
-    #wikinaut-root[data-warp-shake="true"] { animation: wikinaut-warp-shake 300ms ease-in-out; }
-    @keyframes wikinaut-warp-shake {
-      0%,100% { transform: translate(0,0); }
-      20% { transform: translate(2px,-2px); }
-      40% { transform: translate(-3px,2px); }
-      60% { transform: translate(3px,1px); }
-      80% { transform: translate(-2px,-1px); }
-    }
-
-    /* Ship stretches along its heading then snaps to a point as it jumps to lightspeed. */
+    /* Ship stretches along its heading then snaps to a point as it jumps to lightspeed;
+       dropping out of warp replays the same stretch in reverse. (The old separate camera
+       shudder is gone — the flash/streaks/stretch carry the punch-through.) */
     #wikinaut-ship-shell[data-pose="warp"] .wikinaut-ship-body {
       animation: wikinaut-warp-stretch 460ms cubic-bezier(.6,0,.9,.4) forwards;
+    }
+    #wikinaut-ship-shell[data-pose="warp-in"] .wikinaut-ship-body {
+      animation: wikinaut-warp-stretch 460ms cubic-bezier(.2,.7,.3,1) reverse both;
     }
     @keyframes wikinaut-warp-stretch {
       0%   { transform: scaleX(1) scaleY(1); opacity: 1; }
       55%  { transform: scaleX(2.8) scaleY(0.62); opacity: 1; }
       100% { transform: scaleX(0.04) scaleY(0.32); opacity: 0; }
-    }
-    /* Reverse stretch: the ship snaps back from a point into shape as it drops out of warp. */
-    #wikinaut-ship-shell[data-pose="warp-in"] .wikinaut-ship-body {
-      animation: wikinaut-warp-unstretch 460ms cubic-bezier(.2,.7,.3,1) forwards;
-    }
-    @keyframes wikinaut-warp-unstretch {
-      0%   { transform: scaleX(0.04) scaleY(0.32); opacity: 0; }
-      45%  { transform: scaleX(2.4) scaleY(0.6); opacity: 1; }
-      100% { transform: scaleX(1) scaleY(1); opacity: 1; }
     }
 
     /* The console can never obstruct the ship or its target link while flying: it dims for
@@ -1110,9 +1056,9 @@
     .wikinaut-reticle {
       position: absolute;
       transform: translate(-50%, -50%);
-      border: 1.5px solid var(--wn-cyan);
+      border: 1.5px solid var(--wn-accent);
       border-radius: 4px;
-      box-shadow: 0 0 12px rgba(var(--wn-cyan-rgb),0.55), inset 0 0 10px rgba(var(--wn-cyan-rgb),0.18);
+      box-shadow: 0 0 12px rgba(var(--wn-accent-rgb),0.55), inset 0 0 10px rgba(var(--wn-accent-rgb),0.18);
       pointer-events: none;
       animation: wikinaut-reticle-lock 320ms cubic-bezier(.2,.8,.2,1) both,
                  wikinaut-reticle-pulse 1.1s ease-in-out 320ms infinite;
@@ -1123,7 +1069,7 @@
       content: '';
       position: absolute;
       left: -3px; right: -3px; top: -3px; bottom: -3px;
-      border: 2px solid var(--wn-cyan-glow);
+      border: 2px solid var(--wn-accent-glow);
       pointer-events: none;
     }
     .wikinaut-reticle::before { border-right: none; border-bottom: none; width: 9px; height: 9px; right: auto; bottom: auto; }
@@ -1134,8 +1080,8 @@
       100% { transform: translate(-50%,-50%) scale(1) rotate(0deg); opacity: 1; }
     }
     @keyframes wikinaut-reticle-pulse {
-      0%,100% { box-shadow: 0 0 8px rgba(var(--wn-cyan-rgb),0.4), inset 0 0 8px rgba(var(--wn-cyan-rgb),0.15); }
-      50%     { box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.75), inset 0 0 12px rgba(var(--wn-cyan-rgb),0.35); }
+      0%,100% { box-shadow: 0 0 8px rgba(var(--wn-accent-rgb),0.4), inset 0 0 8px rgba(var(--wn-accent-rgb),0.15); }
+      50%     { box-shadow: 0 0 18px rgba(var(--wn-accent-rgb),0.75), inset 0 0 12px rgba(var(--wn-accent-rgb),0.35); }
     }
 
     .wikinaut-landing-burst {
@@ -1144,13 +1090,13 @@
       height: 64px;
       margin: -32px 0 0 -32px;
       border-radius: 50%;
-      border: 2px solid var(--wn-cyan-glow);
-      box-shadow: 0 0 18px rgba(var(--wn-cyan-rgb),0.7), inset 0 0 12px rgba(var(--wn-cyan-rgb),0.4);
+      border: 2px solid var(--wn-accent-glow);
+      box-shadow: 0 0 18px rgba(var(--wn-accent-rgb),0.7), inset 0 0 12px rgba(var(--wn-accent-rgb),0.4);
       pointer-events: none;
       animation: wikinaut-landing-burst 620ms ease-out forwards;
     }
     /* Trailing second ring for a touchdown shock-wave. */
-    .wikinaut-landing-burst.secondary { border-color: var(--wn-cyan); animation-delay: 120ms; opacity: 0.75; }
+    .wikinaut-landing-burst.secondary { border-color: var(--wn-accent); animation-delay: 120ms; opacity: 0.75; }
     @keyframes wikinaut-landing-burst {
       0%   { transform: scale(0.12); opacity: 0.95; }
       100% { transform: scale(1);    opacity: 0; }
@@ -1160,13 +1106,13 @@
        inside a collapsed navbox/details reads as an intentional action, not the page silently
        shifting under the player. */
     .wikinaut-reveal-pulse { animation: wikinaut-reveal-pulse 900ms ease-out; }
-    /* LITERAL cyan on purpose: this class animates ARTICLE containers (navboxes the reveal
-       just expanded) — outside all three --wn-* var hosts, where var() would be invalid and
-       the pulse would vanish. */
+    /* LITERAL accent gold on purpose: this class animates ARTICLE containers (navboxes the
+       reveal just expanded) — outside all three --wn-* var hosts, where var() would be
+       invalid and the pulse would vanish. Keep in sync with PALETTE.accent. */
     @keyframes wikinaut-reveal-pulse {
-      0%   { box-shadow: 0 0 0 0 rgba(0,243,255,0.6); }
-      40%  { box-shadow: 0 0 0 6px rgba(0,243,255,0.25); }
-      100% { box-shadow: 0 0 0 0 rgba(0,243,255,0); }
+      0%   { box-shadow: 0 0 0 0 rgba(243,174,69,0.65); }
+      40%  { box-shadow: 0 0 0 6px rgba(243,174,69,0.28); }
+      100% { box-shadow: 0 0 0 0 rgba(243,174,69,0); }
     }
 
     /* ── Toast ─────────────────────────────────────────────────────────── */
@@ -1178,14 +1124,14 @@
       z-index: 2147483005;
       max-width: min(380px, calc(100vw - 40px));
       padding: 10px 14px;
-      border: 1px solid var(--wn-amber);
+      border: 1px solid rgba(var(--wn-signal-rgb),0.7);
       border-radius: 4px;
-      background: rgba(8,12,24,0.96);
-      box-shadow: 0 0 16px rgba(var(--wn-amber-rgb),0.3);
-      color: var(--wn-amber);
-      font-family: 'Rajdhani', sans-serif;
-      font-size: 13px;
-      line-height: 1.45;
+      background: #0C111E;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 10px 26px rgba(0,0,0,0.55);
+      color: var(--wn-signal);
+      font-family: ${TYPE.mono};
+      font-size: 11.5px;
+      line-height: 1.5;
       animation: wikinaut-toast-in 200ms cubic-bezier(.2,.8,.2,1) forwards;
     }
     @keyframes wikinaut-toast-in {
@@ -1204,28 +1150,31 @@
 
     /* ── Reduced motion ────────────────────────────────────────────────────
        The JS flight path already collapses its timings and skips the warp/ignition
-       visuals when reduce is set; here we silence the remaining decorative CSS
-       keyframes (idle bob, scan, charge, orbit, launch shake/flame/smoke, hyperspace
-       streaks, reticle pulse, star-field drift) so nothing loops or jitters. */
+       visuals when reduce is set; here we silence every surviving decorative CSS
+       keyframe (engine pulse/orbit/flame flicker, launch gantry/smoke/shake/ignition/
+       shockwave, hyperspace zoom/streaks/flash/tunnel/ring/stretch, reticle, bursts,
+       plotting blink, launch-ready pulse, waypoint pop/pulse, toast slide) so nothing
+       loops or jitters. */
     @media (prefers-reduced-motion: reduce) {
       #wikinaut-ship-shell .wikinaut-ship-body,
       #wikinaut-ship-shell .wikinaut-ship-core,
-      #wikinaut-ship-shell .wikinaut-ship-thruster,
       #wikinaut-ship-shell .wikinaut-ship-flame-flicker,
       #wikinaut-root[data-shake="true"] #wikinaut-panel,
-      .wikinaut-gantry, .wikinaut-exhaust, .wikinaut-smoke-puff,
+      .wikinaut-gantry, .wikinaut-smoke-puff,
       .wikinaut-warp, .wikinaut-warp-streak, .wikinaut-flash,
       .wikinaut-warp-tunnel, .wikinaut-warp-ring, .wikinaut-warp-core,
-      #wikinaut-root[data-warp-shake="true"],
       .wikinaut-reticle, .wikinaut-landing-burst,
       .wikinaut-ignition, .wikinaut-shockwave,
       .wikinaut-reveal-pulse,
-      #wikinaut-panel[data-phase="plotting"],
+      .wikinaut-toast,
+      #wikinaut-panel[data-phase="plotting"] #wikinaut-status,
       #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button,
-      #wikinaut-route-card,
+      .wikinaut-wp,
       .wikinaut-wp-node {
         animation: none !important;
       }
+      /* wp-pop starts waypoints at opacity 0 — without the animation they must land visible. */
+      .wikinaut-wp { opacity: 1; transform: none; }
       #wikinaut-route-card { background-position: 0 0; }
     }
   `;
@@ -1383,7 +1332,7 @@
     },
   };
 
-  // ─── Trail canvas (cyan → purple particle wake) ───────────────────────────────
+  // ─── Trail canvas (white-hot → ship-color → trail-color particle wake) ─────────
 
   // ─── FxLoop (single rAF owner) ────────────────────────────────────────────────
   // One requestAnimationFrame chain drives every per-frame consumer (the Trail canvas and
@@ -1513,13 +1462,13 @@
     // trail color) and the prerendered nozzle-flare sprite. Cheap and idempotent — _draw calls
     // it every frame and it no-ops unless the player's colors actually changed.
     _refreshPalette() {
-      const midHex = Settings.get('travelerColor') || PALETTE.cyan;
+      const midHex = Settings.get('travelerColor') || PALETTE.accent;
       const tailHex = Settings.get('trailColor') || PALETTE.purple;
       const key = `${midHex}|${tailHex}`;
       if (key === Trail._paletteKey && Trail._rampBuckets) return;
       Trail._paletteKey = key;
 
-      const core = hexToRgb(PALETTE.cyanGlow); // hottest, at the nozzle
+      const core = hexToRgb(PALETTE.accentGlow); // hottest, at the nozzle
       const mid = hexToRgb(midHex);
       const tail = hexToRgb(tailHex);
       const mix = (c1, c2, t) => ({
@@ -1683,7 +1632,6 @@
               <line x1="20" y1="62" x2="84" y2="62" />
             </g>
           </svg>
-          <div class="wikinaut-exhaust"></div>
           <div class="wikinaut-smoke">
             <span class="wikinaut-smoke-puff" style="left:8%; --wn-smoke-dx:-30px; animation-delay:0ms;"></span>
             <span class="wikinaut-smoke-puff" style="left:26%; --wn-smoke-dx:-14px; animation-delay:80ms;"></span>
@@ -1702,15 +1650,15 @@
         </div>
         <button id="wikinaut-chart-button" class="wikinaut-button" type="button" disabled>Chart Course</button>
         <button id="wikinaut-begin-button" class="wikinaut-button secondary" type="button" disabled>Launch</button>
-        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings" aria-expanded="false">⚙</button>
+        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.5 1.5M11.2 11.2l1.5 1.5M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5"></path></svg></button>
         <div id="wikinaut-route-card" aria-live="polite">
           <div id="wikinaut-status">Set a destination and chart a course through Wikipedia.</div>
           <div id="wikinaut-route-pager" hidden>
             <button id="wikinaut-route-prev" class="wikinaut-button secondary icon" type="button"
-              title="Previous route" aria-label="Previous route">◀</button>
+              title="Previous route" aria-label="Previous route"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 3 5l3.5 3.5"></path></svg></button>
             <span id="wikinaut-route-label" aria-live="polite"></span>
             <button id="wikinaut-route-next" class="wikinaut-button secondary icon" type="button"
-              title="Next route" aria-label="Next route">▶</button>
+              title="Next route" aria-label="Next route"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 1.5 7 5 3.5 8.5"></path></svg></button>
           </div>
           <div id="wikinaut-starmap"></div>
           <div id="wikinaut-freshness"></div>
@@ -2099,126 +2047,162 @@
     updateRouteCycle();
   }
 
-  // Render the route as a plotted star-chart: waypoints laid out across a 2D chart,
-  // joined by a dotted track with a glowing line that "draws on" so charting reads as a
-  // course being plotted (not a static reveal). Expands the panel in place.
-  // `alternates` (optional) are the other equally-short routes: drawn UNDER the selected
-  // path as dimmer, thinner, hue-shifted polylines sharing the selected route's endpoints,
-  // with their intermediate waypoints fanned vertically so the paths visibly diverge.
+  // Thin delegate kept so every call site keeps its historical name; the chart itself
+  // lives in the StarMap module below.
   function renderRoute(route, currentIndex = -1, nextIndex = currentIndex + 1, alternates = [], lane = 0) {
-    const host = dom.routeStrip;
-    host.replaceChildren();
-    if (!route || !route.length) {
-      if (dom.panel) dom.panel.dataset.expanded = 'false';
-      return;
-    }
-    if (dom.panel) dom.panel.dataset.expanded = 'true';
+    StarMap.render(route, currentIndex, nextIndex, alternates, lane);
+  }
 
-    const W = 320;
-    const H = 176;
-    const padX = 28;
-    const padV = 34;
-    const n = route.length;
-    const innerW = W - padX * 2;
-    const amp = (H - padV * 2) / 2;
-    const midY = H / 2;
+  // ─── StarMap — the celestial atlas plate ─────────────────────────────────────
+  // Renders the plotted course as an atlas chart: a hairline graticule with meridian
+  // ticks, a scatter of fixed stars, the voyage line inked in gold (drawn on with
+  // stroke-dashoffset so charting reads as plotting, not a static reveal), and serif
+  // star-name labels. `alternates` are the other equally-short routes: drawn UNDER the
+  // selected path as dimmer polylines sharing the selected route's endpoints, with their
+  // intermediate waypoints fanned vertically so the paths visibly diverge.
+  const StarMap = {
+    W: 320,
+    H: 176,
+    PAD_X: 28,
+    PAD_V: 34,
+
+    render(route, currentIndex = -1, nextIndex = currentIndex + 1, alternates = [], lane = 0) {
+      const host = dom.routeStrip;
+      host.replaceChildren();
+      if (!route || !route.length) {
+        if (dom.panel) dom.panel.dataset.expanded = 'false';
+        return;
+      }
+      if (dom.panel) dom.panel.dataset.expanded = 'true';
+
+      const {W, H} = StarMap;
+      const n = route.length;
+      const midY = H / 2;
+
+      const pts = route.map((title, i) => ({
+        i,
+        title,
+        x: n === 1 ? W / 2 : StarMap.PAD_X + (W - StarMap.PAD_X * 2) * (i / (n - 1)),
+        y: StarMap.laneY(i, n, lane),
+      }));
+
+      const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+
+      const waypoints = pts
+        .map((p) => {
+          const cls = ['wikinaut-wp'];
+          if (p.i === currentIndex) cls.push('current');
+          if (p.i === nextIndex) cls.push('next');
+          if (p.i === n - 1) cls.push('dest');
+          const delay = Math.round((n <= 1 ? 0 : p.i / (n - 1)) * CONFIG.routeSketchMs) + 120;
+          const label = p.title.length > 16 ? `${p.title.slice(0, 15)}…` : p.title;
+          const ly = p.i % 2 === 0 ? p.y - 9 : p.y + 15;
+          return `<g class="${cls.join(' ')}" style="--d:${delay}ms">` +
+            `<circle class="wikinaut-wp-node" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4"></circle>` +
+            `<circle class="wikinaut-wp-core" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.8"></circle>` +
+            `<text class="wikinaut-wp-label" x="${p.x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle">${escapeXml(label)}</text>` +
+            `<title>${escapeXml(p.title)}</title></g>`;
+        })
+        .join('');
+
+      host.innerHTML =
+        `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
+        `${StarMap.graticule()}${StarMap.stars()}${StarMap.alternatesMarkup(alternates)}` +
+        `<path id="wikinaut-route-track" d="${d}"></path>` +
+        `<path id="wikinaut-route-path" d="${d}"></path>${waypoints}</svg>`;
+
+      // "Plot" the voyage line by drawing it on with stroke-dashoffset.
+      const pathEl = host.querySelector('#wikinaut-route-path');
+      if (pathEl && typeof pathEl.getTotalLength === 'function' && n > 1 && !prefersReducedMotion()) {
+        try {
+          const len = pathEl.getTotalLength();
+          pathEl.style.strokeDasharray = String(len);
+          pathEl.style.strokeDashoffset = String(len);
+          pathEl.animate(
+            [{strokeDashoffset: len}, {strokeDashoffset: 0}],
+            {duration: CONFIG.routeSketchMs, easing: 'ease-in-out', fill: 'forwards'},
+          );
+        } catch {
+          /* getTotalLength can throw on detached/zero-size paths; the static line is fine. */
+        }
+      }
+    },
 
     // Every route keeps a STABLE lane — its index in runtime.routes — so cycling the pager
     // visibly moves the bright selected path onto a different lane while the previously
     // selected lane dims underneath. Endpoints (shared source/target) are pinned to the
     // base-lane positions for all routes; lane 0 is the classic center lane.
-    const laneY = (i, m, j) =>
-      i === 0 || i === m - 1 || !j
+    laneY(i, m, j) {
+      const amp = (StarMap.H - StarMap.PAD_V * 2) / 2;
+      const midY = StarMap.H / 2;
+      return i === 0 || i === m - 1 || !j
         ? midY + Math.sin(i * 0.9 + 0.6) * amp
         : midY + Math.sin(i * 0.9 + 0.6 + j * 2.1) * amp * 0.9;
+    },
 
-    const pts = route.map((title, i) => ({
-      i,
-      title,
-      x: n === 1 ? W / 2 : padX + innerW * (i / (n - 1)),
-      y: laneY(i, n, lane),
-    }));
+    // Atlas graticule: two declination rings, the central meridians, and fine tick marks
+    // along the horizontal meridian like a plate's degree scale.
+    graticule() {
+      const {W, H} = StarMap;
+      const midY = H / 2;
+      let ticks = '';
+      for (let x = 16; x < W; x += 16) {
+        const len = x % 64 === 0 ? 3.5 : 2;
+        ticks += `<line class="wikinaut-chart-tick" x1="${x}" y1="${midY - len}" x2="${x}" y2="${midY + len}"></line>`;
+      }
+      return `<g class="wikinaut-chart-grid">` +
+        `<circle class="wikinaut-chart-ring" cx="${W / 2}" cy="${midY}" r="${midY - 6}"></circle>` +
+        `<circle class="wikinaut-chart-ring" cx="${W / 2}" cy="${midY}" r="${midY - 28}"></circle>` +
+        `<line x1="0" y1="${midY}" x2="${W}" y2="${midY}"></line>` +
+        `<line x1="${W / 2}" y1="0" x2="${W / 2}" y2="${H}"></line>` +
+        `${ticks}</g>`;
+    },
 
-    const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+    // Deterministic scatter of fixed stars (hash noise, stable across renders).
+    stars() {
+      const {W, H} = StarMap;
+      const frac = (v) => v - Math.floor(v);
+      let stars = '';
+      for (let i = 0; i < 28; i += 1) {
+        const sx = frac(Math.sin(i * 12.9898) * 43758.5453) * W;
+        const sy = frac(Math.cos(i * 4.1414) * 24634.633) * H;
+        const r = i % 6 === 0 ? 1.1 : 0.6;
+        stars += `<circle class="wikinaut-chart-star" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${r}" opacity="${(0.25 + (i % 4) * 0.16).toFixed(2)}"></circle>`;
+      }
+      return stars;
+    },
 
     // Alternate-route underlay: same x spacing per hop; each alternate rides its own stable
     // lane (`{route, lane}` pairs) with a lane-keyed color, so identity survives cycling.
     // Built via paletteRgba (not CSS var()): these land in SVG presentation attributes,
     // which don't resolve custom properties.
-    const altColors = [paletteRgba('blue', 0.55), paletteRgba('purple', 0.55),
-      paletteRgba('cyan', 0.4), paletteRgba('blueGlow', 0.5), paletteRgba('streakB', 0.45)];
-    let altMarkup = '';
-    alternates.forEach((alt) => {
-      const altRoute = alt.route;
-      const m = altRoute.length;
-      if (m < 2) return;
-      const altPts = altRoute.map((title, i) => {
-        const x = padX + innerW * (i / (m - 1));
-        return {x, y: laneY(i, m, alt.lane), title};
+    alternatesMarkup(alternates) {
+      const {W} = StarMap;
+      const innerW = W - StarMap.PAD_X * 2;
+      const altColors = [paletteRgba('blue', 0.55), paletteRgba('purple', 0.55),
+        paletteRgba('accent', 0.4), paletteRgba('blueGlow', 0.5), paletteRgba('streakB', 0.45)];
+      let altMarkup = '';
+      alternates.forEach((alt) => {
+        const altRoute = alt.route;
+        const m = altRoute.length;
+        if (m < 2) return;
+        const altPts = altRoute.map((title, i) => {
+          const x = StarMap.PAD_X + innerW * (i / (m - 1));
+          return {x, y: StarMap.laneY(i, m, alt.lane), title};
+        });
+        const color = altColors[alt.lane % altColors.length];
+        const altD = altPts
+          .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+        const nodes = altPts.slice(1, -1)
+          .map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2" ` +
+            `fill="${color}"><title>${escapeXml(p.title)}</title></circle>`)
+          .join('');
+        altMarkup += `<g class="wikinaut-route-alt" style="stroke:${color}">` +
+          `<path d="${altD}"></path>${nodes}</g>`;
       });
-      const color = altColors[alt.lane % altColors.length];
-      const altD = altPts
-        .map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
-      const nodes = altPts.slice(1, -1)
-        .map((p) => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2" ` +
-          `fill="${color}"><title>${escapeXml(p.title)}</title></circle>`)
-        .join('');
-      altMarkup += `<g class="wikinaut-route-alt" style="stroke:${color}">` +
-        `<path d="${altD}"></path>${nodes}</g>`;
-    });
-    const frac = (v) => v - Math.floor(v);
-    let stars = '';
-    for (let i = 0; i < 28; i += 1) {
-      const sx = frac(Math.sin(i * 12.9898) * 43758.5453) * W;
-      const sy = frac(Math.cos(i * 4.1414) * 24634.633) * H;
-      const r = i % 6 === 0 ? 1.1 : 0.6;
-      stars += `<circle class="wikinaut-chart-star" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${r}" opacity="${(0.25 + (i % 4) * 0.16).toFixed(2)}"></circle>`;
-    }
-
-    const waypoints = pts
-      .map((p) => {
-        const cls = ['wikinaut-wp'];
-        if (p.i === currentIndex) cls.push('current');
-        if (p.i === nextIndex) cls.push('next');
-        if (p.i === n - 1) cls.push('dest');
-        const delay = Math.round((n <= 1 ? 0 : p.i / (n - 1)) * CONFIG.routeSketchMs) + 120;
-        const label = p.title.length > 16 ? `${p.title.slice(0, 15)}…` : p.title;
-        const ly = p.i % 2 === 0 ? p.y - 9 : p.y + 15;
-        return `<g class="${cls.join(' ')}" style="--d:${delay}ms">` +
-          `<circle class="wikinaut-wp-node" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4"></circle>` +
-          `<circle class="wikinaut-wp-core" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="1.8"></circle>` +
-          `<text class="wikinaut-wp-label" x="${p.x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle">${escapeXml(label)}</text>` +
-          `<title>${escapeXml(p.title)}</title></g>`;
-      })
-      .join('');
-
-    host.innerHTML =
-      `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
-      `<g class="wikinaut-chart-grid">` +
-      `<circle class="wikinaut-chart-ring" cx="${W / 2}" cy="${midY}" r="${midY - 6}"></circle>` +
-      `<circle class="wikinaut-chart-ring" cx="${W / 2}" cy="${midY}" r="${midY - 28}"></circle>` +
-      `<line x1="0" y1="${midY}" x2="${W}" y2="${midY}"></line>` +
-      `<line x1="${W / 2}" y1="0" x2="${W / 2}" y2="${H}"></line>` +
-      `</g>${stars}${altMarkup}` +
-      `<path id="wikinaut-route-track" d="${d}"></path>` +
-      `<path id="wikinaut-route-path" d="${d}"></path>${waypoints}</svg>`;
-
-    // "Plot" the glowing course line by drawing it on with stroke-dashoffset.
-    const pathEl = host.querySelector('#wikinaut-route-path');
-    if (pathEl && typeof pathEl.getTotalLength === 'function' && n > 1 && !prefersReducedMotion()) {
-      try {
-        const len = pathEl.getTotalLength();
-        pathEl.style.strokeDasharray = String(len);
-        pathEl.style.strokeDashoffset = String(len);
-        pathEl.animate(
-          [{strokeDashoffset: len}, {strokeDashoffset: 0}],
-          {duration: CONFIG.routeSketchMs, easing: 'ease-in-out', fill: 'forwards'},
-        );
-      } catch {
-        /* getTotalLength can throw on detached/zero-size paths; the static line is fine. */
-      }
-    }
-  }
+      return altMarkup;
+    },
+  };
 
   async function beginWalk() {
     const route = runtime.route || Storage.load()?.route;
@@ -2618,8 +2602,8 @@
             </linearGradient>
             <radialGradient id="wikinaut-flame-glow" cx="0.72" cy="0.5" r="0.85">
               <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"></stop>
-              <stop class="wikinaut-flame-glow-tint" offset="0.4" stop-color="${PALETTE.cyan}" stop-opacity="0.5"></stop>
-              <stop class="wikinaut-flame-glow-tint" offset="1" stop-color="${PALETTE.cyan}" stop-opacity="0"></stop>
+              <stop class="wikinaut-flame-glow-tint" offset="0.4" stop-color="${PALETTE.accent}" stop-opacity="0.5"></stop>
+              <stop class="wikinaut-flame-glow-tint" offset="1" stop-color="${PALETTE.accent}" stop-opacity="0"></stop>
             </radialGradient>
           </defs>
           <g class="wikinaut-ship-body">
@@ -3730,13 +3714,21 @@
   // ─── Animation helpers ───────────────────────────────────────────────────────
 
   // Tween driver on the shared FxLoop: concurrent animations (a cruise + the trail canvas)
-  // ride one rAF chain instead of racing separate ones.
+  // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
+  // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
+  // await would strand forever and the engine's error handling (stall + retry) never engage.
   function animate(duration, onFrame) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const start = performance.now();
       FxLoop.add(function tick(now) {
-        const progress = clamp((now - start) / duration, 0, 1);
-        onFrame(progress);
+        let progress;
+        try {
+          progress = clamp((now - start) / duration, 0, 1);
+          onFrame(progress);
+        } catch (error) {
+          reject(error);
+          return false;
+        }
         if (progress < 1) return true;
         resolve();
         return false;

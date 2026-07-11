@@ -181,8 +181,9 @@ article. Three things to handle:
   storage, screenshots. Several bugs (Parsoid hrefs, phantom navbox rects, the black flame)
   were only findable this way; don't sign off frontend work on static reading alone.
 - Keep the **FX/engine boundary** mechanically clean: `Figure`/`Trail`/`Transition`/
-  `LaunchSequence`/`LinkFx` must never call `Phase.set`, `setStatus`, `Storage.save/clear`,
-  or `link.click()` — grep for these in FX modules before finishing any frontend change.
+  `LaunchSequence`/`LinkFx`/`FxLoop`/`StarMap` must never call `Phase.set`, `setStatus`,
+  `Storage.save/clear`, or `link.click()` — grep for these in FX modules before finishing
+  any frontend change.
 - Stay in **Python** for backend work (project owner's primary language); don't
   propose a Rust rewrite as a "speedup" — see algorithm notes for why it isn't one.
 
