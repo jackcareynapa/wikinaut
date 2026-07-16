@@ -139,7 +139,10 @@ article. Three things to handle:
   `// @connect` directives in the userscript header avoids it. The script defaults to the
   hosted Fly backend with a self-host override in Settings → Backend URL.
 - **All player settings persist via GM storage** (`GM_getValue`/`GM_setValue`): the Backend
-  URL override, plus flight speed and ship/trail colors (`wikinautSettings:v1` JSON blob).
+  URL override, plus flight speed and the single ship/console color (`wikinautSettings:v1`
+  JSON blob). That one color drives everything via `deriveColorway`/`Settings.colorway()` —
+  ship, flame, trail ramp, hyperspace streaks, and the console accent family; don't add a
+  second color setting.
   `sessionStorage` is only the no-GM fallback and a one-time migration source — don't move
   settings back there. In-flight route state (`wikinautState:v1`) intentionally stays in
   `sessionStorage`: it must survive same-tab navigation but not outlive the tab.

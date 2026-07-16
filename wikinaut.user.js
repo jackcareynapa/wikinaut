@@ -51,7 +51,7 @@
     maxCruiseDurationMs: 12000, // safety net for pathological hops only, NOT a pacing knob —
                                 // the flight-speed setting is always honored below this cap
                                 // (capping compresses the flight and overrides the slider)
-    jumpDurationMs: 1300,
+    jumpDurationMs: 700,  // every warp CSS animation interpolates this, so all FX rescale together
     autocompleteLimit: 6,
     autocompleteDebounceMs: 180,
     maxRoutes: 6,           // backend returns ALL equally-short paths; cap what the star map
@@ -76,11 +76,12 @@
     accent: '#F3AE45',      // ember gold — course line, primary action, ship flame default
     accentHot: '#FFE9C2',   // white-hot center of the accent (flare cores, key text)
     accentGlow: '#FFCE87',  // warm phosphor — telemetry readout, focus rings
+    accentDeep: '#D9932F',  // shadow stop of the accent (launch-key gradient bottom)
     blue: '#5E86B8',        // muted chart blue — graticule, alternate lane
     blueGlow: '#9FBBD9',
     dimWhite: '#9FA8BC',    // cool secondary text on the fascia
     parchment: '#E7DCC5',   // engraved label ivory + atlas chart lettering
-    purple: '#9B8CC9',      // slate violet — trail default, alternate lane
+    purple: '#9B8CC9',      // slate violet — alternate lane, warp-tunnel contrast ring
     flash: '#FFF2D8',       // warm white jump flash
     streakA: '#FFD98A',     // hyperspace streaks: pale gold…
     streakB: '#E07A3F',     // …and deep ember
@@ -124,8 +125,10 @@
   const SETTINGS_DEFAULTS = {
     walkingPixelsPerSecond: 550,  // must sit on the speed slider's step grid (step=50), or
                                   // the thumb snaps and disagrees with the stored value
+    // The ONE player color. Ship, engine flame, trail ramp, hyperspace streaks, and the
+    // console accent family are all derived from it (deriveColorway) — never add a second
+    // color setting; the whole point is that everything glows in agreement.
     travelerColor: PALETTE.accent,
-    trailColor: PALETTE.purple,
   };
 
   const SELECTORS = {
@@ -407,7 +410,7 @@
        by the phase machine (data-phase); no class swapping in JS. The static styling keeps
        the emphasis when the pulse is silenced under reduced motion. */
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button:not(:disabled) {
-      background: linear-gradient(180deg, #FFC873 0%, var(--wn-accent) 60%, #D9932F 100%);
+      background: linear-gradient(180deg, var(--wn-accent-glow) 0%, var(--wn-accent) 60%, var(--wn-accent-deep) 100%);
       color: #171A26;
       font-weight: 700;
       text-shadow: 0 1px 0 rgba(255,255,255,0.25);
@@ -1031,10 +1034,10 @@
        dropping out of warp replays the same stretch in reverse. (The old separate camera
        shudder is gone — the flash/streaks/stretch carry the punch-through.) */
     #wikinaut-ship-shell[data-pose="warp"] .wikinaut-ship-body {
-      animation: wikinaut-warp-stretch 460ms cubic-bezier(.6,0,.9,.4) forwards;
+      animation: wikinaut-warp-stretch 300ms cubic-bezier(.6,0,.9,.4) forwards;
     }
     #wikinaut-ship-shell[data-pose="warp-in"] .wikinaut-ship-body {
-      animation: wikinaut-warp-stretch 460ms cubic-bezier(.2,.7,.3,1) reverse both;
+      animation: wikinaut-warp-stretch 300ms cubic-bezier(.2,.7,.3,1) reverse both;
     }
     @keyframes wikinaut-warp-stretch {
       0%   { transform: scaleX(1) scaleY(1); opacity: 1; }
@@ -1108,7 +1111,9 @@
     .wikinaut-reveal-pulse { animation: wikinaut-reveal-pulse 900ms ease-out; }
     /* LITERAL accent gold on purpose: this class animates ARTICLE containers (navboxes the
        reveal just expanded) — outside all three --wn-* var hosts, where var() would be
-       invalid and the pulse would vanish. Keep in sync with PALETTE.accent. */
+       invalid and the pulse would vanish. Keep in sync with PALETTE.accent; it deliberately
+       stays stock gold even when the player recolors the console (rare 900ms flash — not
+       worth injecting inline vars onto arbitrary article elements). */
     @keyframes wikinaut-reveal-pulse {
       0%   { box-shadow: 0 0 0 0 rgba(243,174,69,0.65); }
       40%  { box-shadow: 0 0 0 6px rgba(243,174,69,0.28); }
@@ -1299,7 +1304,11 @@
     },
 
     load() {
-      Settings._cache = {...SETTINGS_DEFAULTS, ...(Settings._read() || {})};
+      // Filter to known keys so retired settings (e.g. the old trailColor, now derived
+      // from travelerColor) fall out of the cache and out of the next persisted blob.
+      const stored = Settings._read() || {};
+      Settings._cache = Object.fromEntries(
+        Object.keys(SETTINGS_DEFAULTS).map((k) => [k, stored[k] ?? SETTINGS_DEFAULTS[k]]));
       return Settings._cache;
     },
 
@@ -1321,18 +1330,53 @@
       return (Settings._cache ?? SETTINGS_DEFAULTS)[key] ?? SETTINGS_DEFAULTS[key];
     },
 
+    // The derived colorway for the player's color (memoized per raw value). The raw pick
+    // stays stored and shown in the color input; only the EMITTED colors are contrast-
+    // lifted, so re-opening settings never mutates what the player chose.
+    _colorway: null,
+    _colorwayFor: '',
+    colorway() {
+      const raw = Settings.get('travelerColor');
+      if (raw !== Settings._colorwayFor || !Settings._colorway) {
+        Settings._colorway = deriveColorway(raw);
+        Settings._colorwayFor = raw;
+      }
+      return Settings._colorway;
+    },
+
     applyToDom() {
       if (!dom.root) return;
+      const cw = Settings.colorway();
+      // The whole accent family follows the player's color — ship, streaks, and every
+      // console accent. The -rgb triplets must be overridden in lockstep: dozens of rules
+      // read rgba(var(--wn-accent-rgb), α) and would otherwise keep the stock gold.
+      // Deliberately NOT overridden: --wn-signal (reserved fault red), --wn-blue/--wn-blue-glow
+      // (graticule + next-waypoint distinction), --wn-purple (contrast lane/ring).
+      const vars = {
+        '--wn-ship-color': cw.base,
+        '--wn-accent': cw.base,
+        '--wn-accent-hot': cw.hot,
+        '--wn-accent-glow': cw.glow,
+        '--wn-accent-deep': cw.deep,
+        '--wn-streak-a': cw.streakA,
+        '--wn-streak-b': cw.streakB,
+      };
       // The ship shell and jump layer leave #wikinaut-root while a journey is active
-      // (JourneyPortal mounts them on document.body), so the color must be set on each
+      // (JourneyPortal mounts them on document.body), so every var must be set on each
       // host directly — a var set only on the root can't reach them there.
       for (const el of [dom.root, dom.figure, dom.ripLayer]) {
-        el?.style.setProperty('--wn-ship-color', Settings.get('travelerColor'));
+        if (!el) continue;
+        for (const [name, hex] of Object.entries(vars)) {
+          el.style.setProperty(name, hex);
+          if (name !== '--wn-ship-color') {
+            el.style.setProperty(`${name}-rgb`, paletteChannels(hex));
+          }
+        }
       }
     },
   };
 
-  // ─── Trail canvas (white-hot → ship-color → trail-color particle wake) ─────────
+  // ─── Trail canvas (white-hot → ship color → derived-tail particle wake) ────────
 
   // ─── FxLoop (single rAF owner) ────────────────────────────────────────────────
   // One requestAnimationFrame chain drives every per-frame consumer (the Trail canvas and
@@ -1458,19 +1502,19 @@
       FxLoop.add(Trail._draw);
     },
 
-    // Rebuilds the wake color ramp (48 pre-mixed {r,g,b} buckets: white-hot core → ship color →
-    // trail color) and the prerendered nozzle-flare sprite. Cheap and idempotent — _draw calls
-    // it every frame and it no-ops unless the player's colors actually changed.
+    // Rebuilds the wake color ramp (48 pre-mixed {r,g,b} buckets: white-hot core → ship
+    // color → derived tail) and the prerendered nozzle-flare sprite. All three stops come
+    // from the ONE player color via Settings.colorway(). Cheap and idempotent — _draw calls
+    // it every frame and it no-ops unless the player's color actually changed.
     _refreshPalette() {
-      const midHex = Settings.get('travelerColor') || PALETTE.accent;
-      const tailHex = Settings.get('trailColor') || PALETTE.purple;
-      const key = `${midHex}|${tailHex}`;
+      const cw = Settings.colorway();
+      const key = cw.base;
       if (key === Trail._paletteKey && Trail._rampBuckets) return;
       Trail._paletteKey = key;
 
-      const core = hexToRgb(PALETTE.accentGlow); // hottest, at the nozzle
-      const mid = hexToRgb(midHex);
-      const tail = hexToRgb(tailHex);
+      const core = hexToRgb(cw.trailCore); // hottest, at the nozzle
+      const mid = hexToRgb(cw.base);
+      const tail = hexToRgb(cw.trailTail);
       const mix = (c1, c2, t) => ({
         r: Math.round(lerp(c1.r, c2.r, t)),
         g: Math.round(lerp(c1.g, c2.g, t)),
@@ -1675,12 +1719,8 @@
             <span id="wikinaut-speed-value" class="wikinaut-settings-value"></span>
           </div>
           <div class="wikinaut-settings-row">
-            <label class="wikinaut-settings-label" for="wikinaut-ship-color">Ship</label>
+            <label class="wikinaut-settings-label" for="wikinaut-ship-color">Color</label>
             <input type="color" id="wikinaut-ship-color" class="wikinaut-color-input" />
-          </div>
-          <div class="wikinaut-settings-row">
-            <label class="wikinaut-settings-label" for="wikinaut-trail-color">Trail</label>
-            <input type="color" id="wikinaut-trail-color" class="wikinaut-color-input" />
           </div>
           <button id="wikinaut-settings-reset" class="wikinaut-button secondary" type="button">Reset</button>
         </div>
@@ -1713,7 +1753,6 @@
       speedSlider: root.querySelector('#wikinaut-speed-slider'),
       speedValue: root.querySelector('#wikinaut-speed-value'),
       travelerColorInput: root.querySelector('#wikinaut-ship-color'),
-      trailColorInput: root.querySelector('#wikinaut-trail-color'),
       settingsReset: root.querySelector('#wikinaut-settings-reset'),
     });
   }
@@ -1781,10 +1820,6 @@
       Settings.applyToDom();
     });
 
-    dom.trailColorInput.addEventListener('input', () => {
-      Settings.save({trailColor: dom.trailColorInput.value});
-    });
-
     dom.settingsReset.addEventListener('click', () => {
       Settings.reset();
       Settings.applyToDom();
@@ -1798,7 +1833,6 @@
     dom.speedSlider.value = speed;
     dom.speedValue.textContent = `${speed} px/s`;
     dom.travelerColorInput.value = Settings.get('travelerColor');
-    dom.trailColorInput.value = Settings.get('trailColor');
     dom.backendInput.placeholder = CONFIG.apiBaseUrl;
     dom.backendInput.value = Backend.override;
   }
@@ -2179,8 +2213,12 @@
     alternatesMarkup(alternates) {
       const {W} = StarMap;
       const innerW = W - StarMap.PAD_X * 2;
+      // The accent lane follows the player's color (rebuilt per render, so live color
+      // changes track); the rest stay stock PALETTE — they're the contrast lanes, and
+      // streakB here is a lane identity color, not the hyperspace streak.
       const altColors = [paletteRgba('blue', 0.55), paletteRgba('purple', 0.55),
-        paletteRgba('accent', 0.4), paletteRgba('blueGlow', 0.5), paletteRgba('streakB', 0.45)];
+        rgbaFromHex(Settings.colorway().base, 0.4), paletteRgba('blueGlow', 0.5),
+        paletteRgba('streakB', 0.45)];
       let altMarkup = '';
       alternates.forEach((alt) => {
         const altRoute = alt.route;
@@ -2221,6 +2259,11 @@
 
     Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
+
+    // Warm the alias cache for the first hop through the countdown, so the origin page's
+    // own link scan never waits on the network even when the title needs a redirect alias.
+    const firstHop = route[currentIndex + 1];
+    if (firstHop) Routing.fetchRedirectAliases(firstHop).catch(() => {});
 
     // The launch sequence (countdown + gantry + lift-off) plays only here, on the origin
     // page. resume() then continues the flight; the first hop skips the dock-exit because
@@ -2850,21 +2893,48 @@
 
         renderRoute(state.route, currentIndex, currentIndex + 1);
 
-        // Drop out of warp where the previous jump entered, so the ship/portal reappear
-        // in the same screen spot they left from. Consume the entry once used.
-        if (state.entry) {
-          await Transition.arrive(state.entry);
+        const isFinal = currentIndex >= state.route.length - 1;
+        const nextTitle = isFinal ? null : state.route[currentIndex + 1];
+
+        // Drop out of warp where the previous jump entered, so the ship/portal reappear in
+        // the same screen spot they left from — and run the link scan UNDER the arrival
+        // hold instead of after it: the warp-in starts first (so the FX hits the screen
+        // before the heavy synchronous querySelectorAll pass), then the scan (plus any
+        // redirect-alias fetch on a miss) overlaps it. arrive() never scrolls or touches
+        // the article DOM, so the two can't fight; the catch wrapper keeps a scan failure
+        // from surfacing as an unhandled rejection if resume() throws before the await.
+        const arrivePromise = state.entry ? Transition.arrive(state.entry) : null;
+        if (nextTitle) setStatus(`Scanning for ${nextTitle}…`);
+        const scanPromise = nextTitle
+          ? Traversal._locateNextLink(nextTitle).catch((error) => {
+              console.warn('[Wikinaut] wn/scan-failed', error);
+              return {link: null, aliases: [], candidateCount: 0};
+            })
+          : null;
+
+        // Warm the NEXT page's redirect-alias cache while this hop plays out (fire-and-
+        // forget; fetchRedirectAliases writes through the sessionStorage cache, which
+        // survives the navigation). It must be +2: the next page scans for the hop AFTER
+        // this jump. Fired before the scan resolves so every departure path — cruise+jump
+        // AND the URL-jump fallback — leaves with the cache warming; by the next page's
+        // scan the aliases are already local instead of costing a network round trip.
+        if (nextTitle) {
+          const upcoming = state.route[currentIndex + 2];
+          if (upcoming) Routing.fetchRedirectAliases(upcoming).catch(() => {});
+        }
+
+        if (arrivePromise) {
+          await arrivePromise;
+          // Consume the entry once used.
           Storage.saveRoute(state.route, {active: true, currentIndex});
         }
 
-        if (currentIndex >= state.route.length - 1) {
+        if (isFinal) {
           await Traversal.arrive(state.route);
           return;
         }
 
-        const nextTitle = state.route[currentIndex + 1];
-        setStatus(`Scanning for ${nextTitle}…`);
-        const {link, aliases, candidateCount} = await Traversal._locateNextLink(nextTitle);
+        const {link, aliases, candidateCount} = await scanPromise;
 
         if (!link) {
           // The DOM scan still couldn't surface the link (a redirect alias the title text
@@ -2959,7 +3029,7 @@
     async _jumpThrough(link, nextTitle, currentIndex, route) {
       let anchor;
       try {
-        const watchdogMs = CONFIG.jumpDurationMs + 1000;
+        const watchdogMs = CONFIG.jumpDurationMs + 600;
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -3113,9 +3183,9 @@
       LinkFx.spawnReticle(link.getBoundingClientRect());   // scan→lock onto the target link
       LinkFx.landingBurst(target.slitX, target.slitY);     // double shock-ring at touchdown
       Trail.burst(target.slitX, target.slitY, 16);         // scattering touchdown embers
-      await sleep(240);
+      await sleep(140);
       Figure.pose('grab');                                 // charge the jump drive
-      await sleep(360);
+      await sleep(220);
     },
 
     // Fallback when the link can't be found in the live DOM: persist the advanced route
@@ -3134,11 +3204,11 @@
         const slitY = runtime.figurePosition.y + CONFIG.figureSize / 2;
         Transition.renderEmergencyWarp({slitX, slitY});
         Figure.pose('warp');
-        await sleep(420);
+        await sleep(260);
         Figure.hide();
-        await sleep(80);
+        await sleep(60);
       } else {
-        await sleep(prefersReducedMotion() ? 0 : 480);
+        await sleep(prefersReducedMotion() ? 0 : 300);
       }
 
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
@@ -3492,7 +3562,7 @@
       const anchor = Transition.anchorFromLink(link, rect);
       Figure.faceToward(anchor.slitX);
       Figure.pose('tug');
-      await sleep(prefersReducedMotion() ? 0 : 320);
+      await sleep(prefersReducedMotion() ? 0 : 140);
 
       rect = link.getBoundingClientRect();
       Object.assign(anchor, Transition.anchorFromLink(link, rect));
@@ -3505,9 +3575,9 @@
         Transition.renderHyperspace(anchor, 'depart');
         Figure.moveTo(anchor.slitX - CONFIG.figureSize / 2, anchor.slitY - CONFIG.figureSize / 2);
         Figure.pose('warp');
-        await sleep(560); // ship stretches to a point (matches the warp-stretch), then vanishes
+        await sleep(320); // ship stretches to a point (must outlast the 300ms warp-stretch)
         Figure.hide();
-        await sleep(110);
+        await sleep(60);
       }
 
       return anchor;
@@ -3573,7 +3643,7 @@
         streak.className = 'wikinaut-warp-streak';
         const angle = (360 / streakCount) * i + (Math.random() * 8 - 4);
         streak.style.transform = `rotate(${angle}deg)`;
-        streak.style.animationDelay = `${Math.random() * 140}ms`;
+        streak.style.animationDelay = `${Math.random() * 70}ms`;
         warp.append(streak);
       }
 
@@ -3594,7 +3664,7 @@
       // A brief camera shudder as the drive punches through (departure only).
       if (mode === 'depart' && dom.root && !prefersReducedMotion()) {
         dom.root.dataset.warpShake = 'true';
-        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 320);
+        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 240);
       }
     },
 
@@ -3897,6 +3967,67 @@
     };
   }
 
+  function rgbToHex({r, g, b}) {
+    const c = (v) => Math.round(clamp(v, 0, 255)).toString(16).padStart(2, '0');
+    return `#${c(r)}${c(g)}${c(b)}`;
+  }
+
+  // Per-channel lerp between two hex colors; t=0 → hexA, t=1 → hexB.
+  function mixHex(hexA, hexB, t) {
+    const a = hexToRgb(hexA);
+    const b = hexToRgb(hexB);
+    return rgbToHex({
+      r: lerp(a.r, b.r, t),
+      g: lerp(a.g, b.g, t),
+      b: lerp(a.b, b.b, t),
+    });
+  }
+
+  // WCAG relative luminance (0 = black, 1 = white).
+  function relativeLuminance(hex) {
+    const lin = (v) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const {r, g, b} = hexToRgb(hex);
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  }
+
+  // Lift a color toward white until it clears a luminance floor, so a near-black pick can
+  // never render the console/ship unreadable on the dark fascia. Bounded iterations: even
+  // pure black clears 0.15 well within eight 15% white mixes.
+  function ensureReadable(hex, minLum = 0.15) {
+    let out = hex;
+    for (let i = 0; i < 8 && relativeLuminance(out) < minLum; i += 1) {
+      out = mixHex(out, '#FFFFFF', 0.15);
+    }
+    return out;
+  }
+
+  // rgba() string from an arbitrary hex — like paletteRgba, for SVG presentation
+  // attributes where var() can't resolve, but fed by the player's color.
+  function rgbaFromHex(hex, alpha) {
+    return `rgba(${paletteChannels(hex)},${alpha})`;
+  }
+
+  // The full derived colorway from the player's ONE color setting: console accent family,
+  // hyperspace streaks, and the trail ramp endpoints all come from this single base, so
+  // every glow on screen agrees. Plain white/black mixes reproduce the hand-tuned gold
+  // family within a few RGB points for the default accent and generalize to any hue.
+  function deriveColorway(rawHex) {
+    const base = ensureReadable(rawHex, 0.15);
+    return {
+      base,
+      hot: mixHex(base, '#FFFFFF', 0.65),      // white-hot centers (≈ stock accentHot)
+      glow: mixHex(base, '#FFFFFF', 0.40),     // phosphor readouts (≈ stock accentGlow)
+      deep: mixHex(base, '#000000', 0.20),     // launch-key shadow stop (≈ stock accentDeep)
+      streakA: mixHex(base, '#FFFFFF', 0.45),  // hyperspace streaks: pale…
+      streakB: mixHex(base, '#000000', 0.25),  // …and deep
+      trailCore: mixHex(base, '#FFFFFF', 0.40),
+      trailTail: mixHex(mixHex(base, '#808080', 0.30), '#000000', 0.30), // desaturated ember
+    };
+  }
+
   function safeDecode(value) {
     try {
       return decodeURIComponent(value);
@@ -3955,7 +4086,9 @@
       updateRouteCycle();
       if (state.active) {
         setStatus('Resuming course — picking up where the ship left off…');
-        window.setTimeout(() => Traversal.resume(), 420);
+        // Brief settle for first paint only — the navbox-collapse race is handled by the
+        // ensureVisible guards at flight start and touchdown, not by this delay.
+        window.setTimeout(() => Traversal.resume(), 150);
       } else {
         setStatus('Saved course ready. Press Launch when ready.');
         dom.beginButton.disabled = state.route.length < 2;
