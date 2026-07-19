@@ -1,8 +1,9 @@
 # Fly.io configuration for the Wikinaut backend API.
 #
 # The ~5GB SQLite graph is NOT in the image — it lives on the "wikinaut_data" volume mounted at
-# /data. See docs/deployment.md for how to build the graph (on a GCE VM) and load it onto the
-# volume. If you change the app name below, also update the userscript's default backend URL and
+# /data. See docs/web-server-setup.md for how to load the graph onto the volume (and
+# docs/data-source.md for how to build it). If you change the app name below, also update the
+# userscript's default backend URL and
 # its @connect directive.
 app = "wikinaut-api"
 primary_region = "sjc"

@@ -20,32 +20,50 @@ sys.stdout.reconfigure(encoding='utf-8', errors='surrogateescape')
 if len(sys.argv) < 3:
   print('[ERROR] Not enough arguments provided!')
   print('[INFO] Usage: {0} <linktarget_file> <pagelinks_file>'.format(sys.argv[0]))
-  sys.exit()
+  sys.exit(1)
 
 LINKTARGET_FILE = sys.argv[1]
 PAGELINKS_FILE = sys.argv[2]
 
 if not LINKTARGET_FILE.endswith('.gz'):
   print('[ERROR] Link target file must be gzipped.')
-  sys.exit()
+  sys.exit(1)
 
 if not PAGELINKS_FILE.endswith('.gz'):
   print('[ERROR] Page links file must be gzipped.')
-  sys.exit()
+  sys.exit(1)
+
+SCRIPT_NAME = 'replace_link_targets_in_links_file'
 
 # Create a dictionary mapping link target IDs to their corresponding page titles.
 LINK_TARGETS = {}
+skipped_linktargets = 0
 for line in gzip.open(LINKTARGET_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [target_id, target_title] = line.rstrip('\n').split('\t')
+  parts = line.rstrip('\n').split('\t')
+  if len(parts) != 2:
+    skipped_linktargets += 1
+    continue
+  target_id, target_title = parts
   LINK_TARGETS[target_id] = target_title
+if skipped_linktargets:
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_linktargets} malformed line(s) in linktarget file',
+        file=sys.stderr)
 
 # Loop through each link, replacing the link target ID with its title and writing the result (source
 # page ID and target page title) to stdout. Links whose target ID does not resolve (e.g., targets
 # outside namespace 0) are skipped.
+skipped_pagelinks = 0
 for line in gzip.open(PAGELINKS_FILE, 'rt', encoding='utf-8', errors='surrogateescape'):
-  [source_page_id, target_id] = line.rstrip('\n').split('\t')
+  parts = line.rstrip('\n').split('\t')
+  if len(parts) != 2:
+    skipped_pagelinks += 1
+    continue
+  source_page_id, target_id = parts
 
   target_title = LINK_TARGETS.get(target_id)
 
   if target_title is not None:
     print('\t'.join([source_page_id, target_title]))
+if skipped_pagelinks:
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_pagelinks} malformed line(s) in pagelinks file',
+        file=sys.stderr)

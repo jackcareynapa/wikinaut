@@ -1,6 +1,7 @@
-# Mock databases
+# Mock databases and their CSR link arrays
 sdow/sdow.sqlite
 sdow/searches.sqlite
+sdow/csr/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

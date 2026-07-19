@@ -2,91 +2,6 @@
 Helper classes and methods.
 """
 
-import requests
-
-
-WIKIPEDIA_API_URL = 'https://en.wikipedia.org/w/api.php'
-
-
-def fetch_wikipedia_pages_info(page_ids, database):
-  """Fetched page information such as title, URL, and image thumbnail URL for the provided page IDs.
-
-  Args:
-    page_title: The page title to validate.
-
-  Returns:
-    None
-
-  Raises:
-    ValueError: If the provided page title is invalid.
-  """
-  pages_info = {}
-
-  current_page_ids_index = 0
-  while current_page_ids_index < len(page_ids):
-    # Query at most 50 pages per request (given WikiMedia API limits)
-    end_page_ids_index = min(current_page_ids_index + 50, len(page_ids))
-
-    query_params = {
-        'action': 'query',
-        'format': 'json',
-        'pageids': '|'.join(page_ids[current_page_ids_index:end_page_ids_index]),
-        'prop': 'info|pageimages|pageterms',
-        'inprop': 'url|displaytitle',
-        'piprop': 'thumbnail',
-        'pithumbsize': 160,
-        'pilimit': 50,
-        'wbptterms': 'description',
-    }
-
-    current_page_ids_index = end_page_ids_index
-
-    # Identify this client as per Wikipedia API guidelines.
-    # https://www.mediawiki.org/wiki/API:Main_page#Identifying_your_client
-    headers = {
-        'User-Agent': 'Six Degrees of Wikipedia/1.0 (https://www.sixdegreesofwikipedia.com/; wenger.jacob@gmail.com)',
-    }
-
-    req = requests.get(WIKIPEDIA_API_URL, params=query_params, headers=headers)
-
-    try:
-      pages_result = req.json().get('query', {}).get('pages')
-    except ValueError as error:
-      # Wrap error message and re-raise exception.
-      error_message = f"Failed to decode MediaWiki API response: {error}"
-      raise ValueError(error_message) from error
-    
-    if (pages_result is None):
-      raise ValueError('Empty MediaWiki API response')
-
-    for page_id, page in pages_result.items():
-      page_id = int(page_id)
-
-      if 'missing' in page:
-        # If the page has been deleted since the current Wikipedia database dump, fetch the page
-        # title from the SDOW database and create the (albeit broken) URL.
-        page_title = database.fetch_page_title(page_id)
-        pages_info[page_id] = {
-            'id': page_id,
-            'title': page_title,
-            'url': 'https://en.wikipedia.org/wiki/{0}'.format(page_title)
-        }
-      else:
-        pages_info[page_id] = {
-            'title': page['title'],
-            'url': page['fullurl']
-        }
-
-        thumbnail_url = page.get('thumbnail', {}).get('source')
-        if thumbnail_url:
-          pages_info[page_id]['thumbnailUrl'] = thumbnail_url
-
-        description = page.get('terms', {}).get('description', [])
-        if description:
-          pages_info[page_id]['description'] = description[0][0].upper() + description[0][1:]
-
-  return pages_info
-
 
 def get_sanitized_page_title(page_title):
   """Validates and returns the sanitized version of the provided page title, transforming it into
@@ -195,14 +110,17 @@ class InvalidRequest(Exception):
   """Wrapper class for building invalid request error responses."""
   status_code = 400
 
-  def __init__(self, message, status_code=None, payload=None):
+  def __init__(self, message, status_code=None, payload=None, code=None):
     Exception.__init__(self)
     self.message = message
     if status_code is not None:
       self.status_code = status_code
     self.payload = payload
+    self.code = code
 
   def to_dict(self):
     result = dict(self.payload or ())
     result['error'] = self.message
+    if self.code:
+      result['code'] = self.code
     return result

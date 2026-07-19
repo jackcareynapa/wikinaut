@@ -1,7 +1,11 @@
 import os
 import sqlite3
-import subprocess
+import sys
 from collections import defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from build_csr_graph import build_csr  # noqa: E402
 
 cwd = os.path.dirname(__file__)
 mock_sdow_database_filename = os.path.join(cwd, '../sdow/sdow.sqlite')
@@ -127,19 +131,32 @@ for page_id, outgoing_links in forward_links:
       prod_page_ids[page_id], outgoing_links_count, incoming_links_count, outgoing_links, incoming_links))
 
 conn.commit()
+conn.close()
 
 print('[INFO] Successfully created mock SDOW database: {0}'.format(mock_sdow_database_filename))
+
+# Build the CSR link arrays beside the mock database so local dev and tests exercise the same
+# CSR-backed search path as production (sdow/server.py loads ./csr relative to sdow/).
+mock_csr_directory = os.path.join(cwd, '../sdow/csr')
+build_csr(mock_sdow_database_filename, mock_csr_directory)
 
 
 print('[INFO] Creating mock searches database: {0}'.format(mock_searches_database_filename))
 
+# Recreate from scratch to keep this script idempotent: the shared schema creates an index
+# without IF NOT EXISTS, which would fail if run against an existing database.
+if os.path.exists(mock_searches_database_filename):
+  os.remove(mock_searches_database_filename)
+
 conn = sqlite3.connect(mock_searches_database_filename)
 
-# Create searches table.
-subprocess.call('sqlite3 {0} ".read {1}"'.format(
-    mock_searches_database_filename, searches_database_sql_filename), shell=True)
-# conn.execute('DROP TABLE IF EXISTS searches')
-# conn.execute('CREATE TABLE IF NOT EXISTS searches(source_id INTEGER NOT NULL, target_id INTEGER NOT NULL, duration REAL NOT NULL, degrees_count INTEGER, paths_count INTEGER NOT NULL, t TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL);')
+# Create the searches table by running the shared schema file through the sqlite3 module (no
+# sqlite3 CLI needed); the schema is pure SQL, so executescript handles it directly. This is the
+# same table the production searches.sqlite is seeded with (see docs/web-server-setup.md).
+with open(searches_database_sql_filename) as searches_schema:
+  conn.executescript(searches_schema.read())
+conn.commit()
+conn.close()
 
 print('[INFO] Successfully created mock searches database: {0}'.format(
     mock_searches_database_filename))

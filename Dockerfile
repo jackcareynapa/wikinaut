@@ -1,12 +1,10 @@
 # Wikinaut backend — Flask + gunicorn API answering shortest-path queries over the Wikipedia
 # link graph.
 #
-# The ~5GB SQLite graph is intentionally NOT baked into the image; it lives on a persistent volume
-# mounted at /data (see fly.toml and docs/deployment.md). Running gunicorn with `--chdir /data`
-# makes server.py's relative './sdow.sqlite' / './searches.sqlite' resolve onto that volume, while
-# `--pythonpath /app` keeps the `sdow` package importable. We bind the bare Flask `app` (not
-# `load_app("prod")`) so the container does not try to initialize Google Cloud logging, which would
-# require GCP credentials.
+# The ~14GB SQLite graph is intentionally NOT baked into the image; it lives on a persistent
+# volume mounted at /data (see fly.toml and docs/web-server-setup.md). Running gunicorn with
+# `--chdir /data` makes server.py's relative './sdow.sqlite' / './searches.sqlite' resolve onto
+# that volume, while `--pythonpath /app` keeps the `sdow` package importable.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -21,6 +19,10 @@ COPY sql/ ./sql/
 
 EXPOSE 8080
 
+# Serve the API. gunicorn runs from /data so server.py's relative './sdow.sqlite' /
+# './searches.sqlite' resolve onto the mounted volume; --pythonpath /app keeps the `sdow`
+# package importable. (To load/repair the volume, temporarily override with
+# `fly machine update <id> -C "sleep infinity"`, then restore with `fly deploy`.)
 CMD ["gunicorn", \
      "--chdir", "/data", \
      "--pythonpath", "/app", \
