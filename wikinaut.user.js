@@ -580,18 +580,47 @@
     #wikinaut-panel[data-launch="arming"] #wikinaut-launchpad,
     #wikinaut-panel[data-launch="launch"] #wikinaut-launchpad { opacity: 1; }
 
+    /* Hangar-bay mouth the craft rises out of: a dark recess set into the fascia top,
+       revealed when the bay doors part. Masked so it dissolves upward over the article
+       instead of ending in a hard edge; a faint accent glow rises from the bay floor. */
+    #wikinaut-launchpad::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      bottom: 0;
+      width: 96px;
+      height: 64px;
+      transform: translateX(-50%);
+      border-radius: 12px 12px 0 0;
+      background:
+        radial-gradient(80% 55% at 50% 100%, rgba(var(--wn-accent-rgb),0.20), transparent 72%),
+        linear-gradient(180deg, rgba(var(--wn-space-ink-rgb),0.55), rgba(var(--wn-space-ink-rgb),0.96) 70%);
+      box-shadow:
+        inset 0 0 0 1px rgba(var(--wn-steel-dark-rgb),0.9),
+        inset 0 6px 14px rgba(0,0,0,0.7);
+      -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 36%);
+      mask-image: linear-gradient(180deg, transparent 0%, #000 36%);
+    }
+
     .wikinaut-gantry-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
     .wikinaut-gantry {
       transform: scaleY(0);
       transform-origin: 50% 100%;
       transition: transform 460ms cubic-bezier(.2,.8,.2,1);
     }
-    /* Steel service tower, not a neon hologram. */
+    /* Steel service tower, not a neon hologram. Each member is drawn twice — a dark
+       under-stroke below the lit steel — so the rig reads over the white article page
+       as well as against dark imagery (light-only strokes vanished on white). */
     .wikinaut-gantry line {
-      stroke: rgba(var(--wn-steel-hi-rgb),0.75);
-      stroke-width: 2;
+      stroke: rgba(var(--wn-steel-hi-rgb),0.85);
+      stroke-width: 1.8;
       stroke-linecap: round;
       filter: drop-shadow(0 1px 2px rgba(0,0,0,0.6));
+    }
+    .wikinaut-gantry-back line {
+      stroke: rgba(var(--wn-steel-shadow-rgb),0.85);
+      stroke-width: 4;
+      filter: none;
     }
     #wikinaut-panel[data-launch="arming"] .wikinaut-gantry,
     #wikinaut-panel[data-launch="launch"] .wikinaut-gantry { transform: scaleY(1); }
@@ -603,21 +632,25 @@
       to { transform: scaleY(1) translateY(26px); opacity: 0; }
     }
 
+    /* Two hatch leaves that exactly seal the bay mouth (96px, 18%–82% of the pad) when
+       closed, and slide flush to its flanks when parted — doors OF something, not
+       free-floating pills. */
     .wikinaut-baydoor {
       position: absolute;
       bottom: 0;
-      width: 46%;
-      height: 8px;
+      width: 32%;
+      height: 9px;
       background: linear-gradient(180deg, var(--wn-steel), var(--wn-steel-dark));
       border: 1px solid rgba(var(--wn-accent-rgb),0.5);
+      border-radius: 2px;
       transition: transform 380ms ease;
     }
-    .wikinaut-baydoor.left { left: 4%; }
-    .wikinaut-baydoor.right { right: 4%; }
+    .wikinaut-baydoor.left { left: 18%; }
+    .wikinaut-baydoor.right { right: 18%; }
     #wikinaut-panel[data-launch="arming"] .wikinaut-baydoor.left,
-    #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.left { transform: translateX(-94%); }
+    #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.left { transform: translateX(-100%); }
     #wikinaut-panel[data-launch="arming"] .wikinaut-baydoor.right,
-    #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.right { transform: translateX(94%); }
+    #wikinaut-panel[data-launch="launch"] .wikinaut-baydoor.right { transform: translateX(100%); }
 
     /* (The old pad-level exhaust bloom is gone — the ship's own launch torch plus the
        ignition flash below carry the blast; the pad keeps its smoke.) */
@@ -1668,6 +1701,14 @@
         <div id="wikinaut-launchpad" aria-hidden="true">
           <svg class="wikinaut-gantry-svg" viewBox="0 0 104 84" aria-hidden="true">
             <g class="wikinaut-gantry">
+              <g class="wikinaut-gantry-back">
+                <line x1="20" y1="82" x2="20" y2="14" />
+                <line x1="84" y1="82" x2="84" y2="14" />
+                <line x1="20" y1="14" x2="40" y2="6" />
+                <line x1="84" y1="14" x2="64" y2="6" />
+                <line x1="20" y1="40" x2="84" y2="40" />
+                <line x1="20" y1="62" x2="84" y2="62" />
+              </g>
               <line x1="20" y1="82" x2="20" y2="14" />
               <line x1="84" y1="82" x2="84" y2="14" />
               <line x1="20" y1="14" x2="40" y2="6" />
@@ -2742,14 +2783,32 @@
       JourneyPortal.activate();
       Trail.clear();
 
-      const pad = LaunchSequence.padPosition();
-      Figure.show();
       runtime.figureAngle = -90;          // nose up
-      Figure.moveTo(pad.x, pad.y);
-      Figure.pose('idle');
-
       dom.panel.dataset.launch = 'arming';
-      await sleep(reduce ? 0 : 500);
+
+      if (reduce) {
+        const pad = LaunchSequence.padPosition();
+        Figure.moveTo(pad.x, pad.y);
+        Figure.show();
+        Figure.pose('idle');
+        return;
+      }
+
+      // Let the bay doors part and the hangar mouth appear before the craft rises.
+      await sleep(260);
+      const from = LaunchSequence.padPosition();
+      Figure.moveTo(from.x, from.y + 26);
+      Figure.show();
+      Figure.pose('idle');
+      // Rise out of the bay onto the pad. The pad is re-measured every frame: if the
+      // panel is still settling (the route card's expansion can overlap a quick Launch
+      // press), the ship tracks the live rect instead of arming against a stale one.
+      await animate(430, (p) => {
+        const pad = LaunchSequence.padPosition();
+        const eased = 1 - easeInCubic(1 - p);
+        Figure.moveTo(pad.x, pad.y + 26 * (1 - eased));
+      });
+      await sleep(140);
     },
 
     // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it.
