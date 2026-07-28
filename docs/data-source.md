@@ -8,7 +8,7 @@ scripts against current dumps.
 ## Table of contents
 
 - [Data source](#data-source)
-- [How this differs from upstream SDOW](#how-this-differs-from-upstream-sdow)
+- [The 2024 `pagelinks` schema change](#the-2024-pagelinks-schema-change)
 - [Prerequisites](#prerequisites)
 - [Building the database](#building-the-database)
   - [Quick start](#quick-start)
@@ -17,6 +17,7 @@ scripts against current dumps.
   - [Troubleshooting](#troubleshooting)
 - [Building on a cloud VM (GCE)](#building-on-a-cloud-vm-gce)
 - [Database schema](#database-schema)
+- [CSR link arrays](#csr-link-arrays)
 - [Historical search results](#historical-search-results)
 - [Pre-built databases (upstream)](#pre-built-databases-upstream)
 
@@ -26,24 +27,24 @@ Data for this project comes from Wikimedia, which creates [gzipped SQL dumps of 
 Wikipedia database](https://dumps.wikimedia.org/enwiki) twice monthly. The Wikinaut SQLite database
 is built by downloading, trimming, and parsing the following four SQL tables:
 
-1.  [`page`](https://www.mediawiki.org/wiki/Manual:Page_table) — the ID and name (among other
+1.  [`page`](https://www.mediawiki.org/wiki/Manual:Page_table): the ID and name (among other
     things) for all pages.
-2.  [`pagelinks`](https://www.mediawiki.org/wiki/Manual:Pagelinks_table) — the source page and the
+2.  [`pagelinks`](https://www.mediawiki.org/wiki/Manual:Pagelinks_table): the source page and the
     **link target ID** for every link.
-3.  [`linktarget`](https://www.mediawiki.org/wiki/Manual:Linktarget_table) — maps each link target
+3.  [`linktarget`](https://www.mediawiki.org/wiki/Manual:Linktarget_table): maps each link target
     ID to its namespace and title.
-4.  [`redirect`](https://www.mediawiki.org/wiki/Manual:Redirect_table) — the source and target pages
+4.  [`redirect`](https://www.mediawiki.org/wiki/Manual:Redirect_table): the source and target pages
     for all redirects.
 
 Wikinaut only deals with actual Wikipedia articles, which in Wikipedia parlance means pages in
 [namespace](https://en.wikipedia.org/wiki/Wikipedia:Namespace) `0`.
 
-## How this differs from upstream SDOW
+## The 2024 `pagelinks` schema change
 
 Before mid-2024, `pagelinks` stored link target titles directly (`pl_namespace` / `pl_title`).
 **Around July 1, 2024, Wikipedia normalized this:** those columns were dropped and replaced by
 `pl_target_id`, which references the new `linktarget` table. Upstream SDOW's build scripts assume the
-old schema, so run against a current dump they **silently produce a broken graph** (no crash — just
+old schema, so run against a current dump they **silently produce a broken graph** (no crash, just
 empty/missing links).
 
 Wikinaut's [`buildDatabase.sh`](../scripts/buildDatabase.sh) handles the new schema. It:
@@ -62,12 +63,12 @@ was Python 2). If you touch dump processing, **preserve this `linktarget` join.*
 
 ## Prerequisites
 
-The build runs on **GNU/Linux only** — `buildDatabase.sh` uses `grep -P` (PCRE) and GNU `sort -S`,
+The build runs on **GNU/Linux only**. `buildDatabase.sh` uses `grep -P` (PCRE) and GNU `sort -S`,
 which the BSD tools on macOS lack. (Local development against the mock database works on macOS; see
 [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).)
 
 - **Tools on `PATH`:** `git`, `wget`, `pigz`, `sqlite3`, `python3`. `aria2c` is optional but
-  recommended — the script uses it for the faster torrent download path and falls back to `wget`.
+  recommended; the script uses it for the faster torrent download path and falls back to `wget`.
 
   ```bash
   sudo apt-get -q update
@@ -77,7 +78,7 @@ which the BSD tools on macOS lack. (Local development against the mock database 
 - **Disk:** ~200 GB SSD. The dumps are only ~11 GB, but the pipeline keeps every multi-GB
   intermediate file plus the ~14 GB final SQLite and its `.gz`.
 - **Memory:** ~32 GB is comfortable (64 GB is generous). The `linktarget` join holds the whole
-  namespace-0 link-target map in RAM (**~4–7 GB resident**) and the build runs `sort -S 80%`. 16 GB
+  namespace-0 link-target map in RAM (**~4-7 GB resident**) and the build sorts with `sort -S 100%`/`sort -S 80%`. 16 GB
   works but sort spills to disk and it's tight.
 - **Time:** roughly 2 hours end to end, dominated by the `pagelinks` processing and sorts.
 
@@ -97,12 +98,12 @@ With no argument the script downloads the most recent dump listed at
 ### What the build produces
 
 The final output is **`scripts/dump/wikinaut.sqlite`** (plus `wikinaut.sqlite.gz`). Note the app
-itself opens the file as `sdow.sqlite`, so deployment renames it on the way onto the server volume —
-see [`web-server-setup.md`](./web-server-setup.md).
+itself opens the file as `sdow.sqlite`, so deployment renames it on the way onto the server volume.
+See [`web-server-setup.md`](./web-server-setup.md).
 
 The build is a pipeline of gzipped intermediate files, produced roughly in this order. Each stage is
 guarded by `if [ ! -f <output> ]` and writes to a temp file it renames on success, so **re-running
-the script skips completed stages** — it's safe to resume after an interruption:
+the script skips completed stages** and is safe to resume after an interruption:
 
 | Stage | Files in `scripts/dump/` |
 | --- | --- |
@@ -132,7 +133,7 @@ sqlite3 dump/wikinaut.sqlite "SELECT id, title, is_redirect FROM pages WHERE tit
 ```
 
 For an end-to-end check that the graph actually answers path queries, point the backend at it and
-hit `/paths` — see the smoke test in [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).
+hit `/paths`; see the smoke test in [`CONTRIBUTING.md`](../.github/CONTRIBUTING.md).
 
 ### Troubleshooting
 
@@ -143,9 +144,9 @@ hit `/paths` — see the smoke test in [`CONTRIBUTING.md`](../.github/CONTRIBUTI
 - **Out of disk:** the intermediates are large. Ensure ~200 GB free; delete the raw `*.sql.gz`
   downloads once trimming has completed if you're tight (they won't be regenerated unless you delete
   their trimmed outputs too).
-- **Out of memory / OOM-killed during the join or a sort:** lower the sort buffer (`sort -S 80%` →
-  a fixed size like `sort -S 8G`) or use a bigger machine — the `linktarget` join alone needs several
-  GB resident.
+- **Out of memory / OOM-killed during the join or a sort:** lower the sort buffers (the script
+  uses `sort -S 100%` for the large sort and `sort -S 80%` for the rest) to a fixed size like
+  `sort -S 8G`, or use a bigger machine. The `linktarget` join alone needs several GB resident.
 - **Resuming:** the script is idempotent per stage (see the table above). A killed run picks up where
   it left off; a stage that was interrupted mid-write is re-done because its output is only renamed
   into place on success.
@@ -209,52 +210,75 @@ Engine, but any Linux VM meeting the [prerequisites](#prerequisites) works.
 The Wikinaut database (`wikinaut.sqlite`, opened by the app as `sdow.sqlite`) is a single SQLite file
 containing three tables:
 
-1.  `pages` — page information for all pages.
-    1.  `id` — page ID.
-    2.  `title` — [sanitized page title](https://www.mediawiki.org/wiki/Manual:Page_title).
-    3.  `is_redirect` — whether the page is a redirect (`1`) or not (`0`).
-2.  `links` — outgoing and incoming links for each non-redirect page.
-    1.  `id` — page ID of the source page (the page that contains the link).
-    2.  `outgoing_links_count` — number of pages this page links to.
-    3.  `incoming_links_count` — number of pages that link to this page.
-    4.  `outgoing_links` — `|`-separated list of page IDs this page links to.
-    5.  `incoming_links` — `|`-separated list of page IDs that link to this page.
-3.  `redirects` — source and target page IDs for all redirects.
-    1.  `source_id` — page ID of the redirecting page.
-    2.  `target_id` — page ID of the page it redirects to.
+**`pages`**, page information for all pages:
+
+| Column | Meaning |
+| --- | --- |
+| `id` | Page ID |
+| `title` | [Sanitized page title](https://www.mediawiki.org/wiki/Manual:Page_title) |
+| `is_redirect` | Whether the page is a redirect (`1`) or not (`0`) |
+
+**`links`**, outgoing and incoming links for each non-redirect page:
+
+| Column | Meaning |
+| --- | --- |
+| `id` | Page ID of the source page (the page that contains the link) |
+| `outgoing_links_count` | Number of pages this page links to |
+| `incoming_links_count` | Number of pages that link to this page |
+| `outgoing_links` | `\|`-separated list of page IDs this page links to |
+| `incoming_links` | `\|`-separated list of page IDs that link to this page |
+
+**`redirects`**, source and target page IDs for all redirects:
+
+| Column | Meaning |
+| --- | --- |
+| `source_id` | Page ID of the redirecting page |
+| `target_id` | Page ID of the page it redirects to |
 
 The table schemas live in [`sql/`](../sql/).
 
+## CSR link arrays
+
+The `links` table above is the fallback link source. The backend prefers flat, memory-mapped CSR
+(compressed sparse row) arrays, where a neighbor lookup is one binary search plus one contiguous
+slice instead of a B-tree walk plus string parsing. Build them from a finished graph:
+
+```bash
+python scripts/build_csr_graph.py <sdow.sqlite> <out_dir>
+```
+
+That writes five `.npy` files (`csr_ids`, `csr_out_offsets`, `csr_out_edges`, `csr_in_offsets`,
+`csr_in_edges`), about 1.3 GB total for English Wikipedia. `sdow/csr_graph.py` opens them with
+numpy's `mmap_mode='r'`, so gunicorn workers share them through the OS page cache at near-zero
+resident memory. When the arrays are absent, `CSRGraph.load` returns `None` and the SQLite `links`
+table serves neighbors instead.
+
+The arrays are derived data: rebuild them whenever the graph is rebuilt, or delete them so the app
+falls back rather than serving paths from a stale graph.
+
 ## Historical search results
 
-Historical search results are stored in a **separate** SQLite database (`searches.sqlite`) with a
-single `searches` table (schema in [`sql/createSearchesTable.sql`](../sql/createSearchesTable.sql)):
+Search results are stored in a **separate** SQLite database (`searches.sqlite`), which keeps writes
+off the read-only graph file and makes swapping in a newer dump easy. Schema in
+[`sql/createSearchesTable.sql`](../sql/createSearchesTable.sql):
 
-1.  `source_id` — page ID of the source page.
-2.  `target_id` — page ID of the target page.
-3.  `duration` — how long the search took, in seconds.
-4.  `degrees_count` — number of degrees between source and target.
-5.  `paths_count` — number of paths found.
-6.  `paths` — stringified JSON of the page-ID paths.
-7.  `t` — timestamp when the search finished.
+| Column | Meaning |
+| --- | --- |
+| `source_id` | Page ID of the source page |
+| `target_id` | Page ID of the target page |
+| `duration` | How long the search took, in seconds |
+| `degrees_count` | Number of degrees between source and target (`NULL` when no path exists) |
+| `paths_count` | Number of paths found |
+| `t` | Timestamp when the search finished |
 
-Keeping search results in a separate file avoids locking the main graph database and makes it easy to
-swap `sdow.sqlite` for a newer Wikipedia dump. Search results are not required to run the project and
-are not published for download.
+No IP address, user agent, or other caller identity is recorded. Rows older than
+`SEARCHES_RETENTION_DAYS` (90) are pruned periodically by `Database.prune_old_searches`, so the log
+cannot grow without bound on the volume it shares with the graph. Search results are not required to
+run the project and are not published for download.
 
 ## Pre-built databases (upstream)
 
-The upstream Six Degrees of Wikipedia project published pre-built SQLite databases on a
-["requester pays"](https://cloud.google.com/storage/docs/requester-pays) Google Cloud Storage bucket
-(`gs://sdow-prod/dumps/<YYYYMMDD>/sdow.sqlite.gz`), the most recent being `20231220` (~4.3 GB).
-**These predate the 2024 `linktarget` schema change**, so they load and run but reflect a late-2023
-snapshot of Wikipedia. For a current graph, [build your own](#building-the-database). The full
-historical list and download details are in the [upstream repo](https://github.com/jwngr/sdow).
-
-Example download (replace `<GCP_PROJECT_ID>` with your project ID; copying is free within GCP and
-~\$0.05 per file otherwise):
-
-```bash
-gsutil -u <GCP_PROJECT_ID> cp gs://sdow-prod/dumps/20231220/sdow.sqlite.gz .
-pigz -d sdow.sqlite.gz
-```
+Upstream Six Degrees of Wikipedia published pre-built databases at
+`gs://sdow-prod/dumps/<YYYYMMDD>/sdow.sqlite.gz` (most recent `20231220`). They predate the 2024
+`linktarget` schema change and so reflect a late-2023 Wikipedia. For a current graph,
+[build your own](#building-the-database).

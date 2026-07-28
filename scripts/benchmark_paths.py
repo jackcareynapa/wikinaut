@@ -139,8 +139,9 @@ def main(page_count, avg_degree, search_count):
     print()
     report('sqlite', sqlite_durations)
     report('csr', csr_durations)
-    speedup = (sum(sqlite_durations) / len(sqlite_durations)) / \
-        (sum(csr_durations) / len(csr_durations))
+    sqlite_mean = sum(sqlite_durations) / len(sqlite_durations)
+    csr_mean = sum(csr_durations) / len(csr_durations)
+    speedup = sqlite_mean / csr_mean
     print('  {0:<8} {1:.1f}x faster (mean)'.format('csr vs sqlite:', speedup))
     print()
     print('  NOTE: this synthetic graph fits in the OS page cache, so both sides run at RAM')

@@ -1,4 +1,4 @@
-# Wikinaut backend — Flask + gunicorn API answering shortest-path queries over the Wikipedia
+# Wikinaut backend: Flask + gunicorn API answering shortest-path queries over the Wikipedia
 # link graph.
 #
 # The ~14GB SQLite graph is intentionally NOT baked into the image; it lives on a persistent

@@ -63,21 +63,16 @@ def breadth_first_search(source_page_id, target_page_id, database):
   visited_forward = {}
   visited_backward = {}
 
-  # Set the initial forward and backward depths to 0.
-  forward_depth = 0
-  backward_depth = 0
-
   # Continue the breadth first search until a path has been found or either of the unvisited lists
   # are empty.
   while (len(paths) == 0) and ((len(unvisited_forward) != 0) and (len(unvisited_backward) != 0)):
-    # Run the next iteration of the breadth first search in whichever direction has the smaller number
-    # of links at the next level.
+    # Run the next iteration of the breadth first search in whichever direction has the
+    # smaller number of links at the next level.
     forward_links_count = database.fetch_outgoing_links_count(unvisited_forward.keys())
     backward_links_count = database.fetch_incoming_links_count(unvisited_backward.keys())
 
     if forward_links_count < backward_links_count:
-      #---  FORWARD BREADTH FIRST SEARCH  ---#
-      forward_depth += 1
+      # ---  FORWARD BREADTH FIRST SEARCH  --- #
 
       # Fetch the pages which can be reached from the currently unvisited forward pages.
       outgoing_links = database.fetch_outgoing_links(unvisited_forward.keys())
@@ -102,8 +97,7 @@ def breadth_first_search(source_page_id, target_page_id, database):
             unvisited_forward[target_page_id].append(source_page_id)
 
     else:
-      #---  BACKWARD BREADTH FIRST SEARCH  ---#
-      backward_depth += 1
+      # ---  BACKWARD BREADTH FIRST SEARCH  --- #
 
       # Fetch the pages which can reach the currently unvisited backward pages.
       incoming_links = database.fetch_incoming_links(unvisited_backward.keys())
@@ -119,7 +113,8 @@ def breadth_first_search(source_page_id, target_page_id, database):
         for source_page_id in source_page_ids:
           # If the source page is in neither visited backward nor unvisited backward, add it to
           # unvisited backward.
-          if (source_page_id not in visited_backward) and (source_page_id not in unvisited_backward):
+          if (source_page_id not in visited_backward) and \
+             (source_page_id not in unvisited_backward):
             unvisited_backward[source_page_id] = [target_page_id]
 
           # If the source page is in unvisited backward, add the target page as another one of its
@@ -127,7 +122,7 @@ def breadth_first_search(source_page_id, target_page_id, database):
           elif source_page_id in unvisited_backward:
             unvisited_backward[source_page_id].append(target_page_id)
 
-    #---  CHECK FOR PATH COMPLETION  ---#
+    # ---  CHECK FOR PATH COMPLETION  --- #
     # The search is complete if any of the pages are in both unvisited backward and unvisited, so
     # find the resulting paths.
     for page_id in unvisited_forward:

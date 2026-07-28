@@ -182,3 +182,41 @@ def test_server_uses_csr_link_source(flask_app):
   from sdow import server
   from sdow.csr_graph import CSRGraph
   assert isinstance(server.database.link_source, CSRGraph)
+
+
+# ---------------------------------------------------------------------------------------------
+# SQLite link lookups are chunked and parameterized. A wide BFS frontier can hold far more page
+# IDs than SQLite accepts host parameters in one statement, so results must not depend on how
+# many chunks the IDs are split across.
+# ---------------------------------------------------------------------------------------------
+
+def test_links_are_chunked_without_changing_results(sqlite_database, all_page_ids, monkeypatch):
+  from sdow import database as database_module
+
+  def links_for(chunk_size):
+    monkeypatch.setattr(database_module, 'LINKS_CHUNK_SIZE', chunk_size)
+    links = dict(sqlite_database.fetch_outgoing_links(all_page_ids))
+    count = sqlite_database.fetch_outgoing_links_count(all_page_ids)
+    return links, count
+
+  # A chunk size of 1 forces one statement per page ID; the mock graph fits in a single chunk
+  # at the production size, so both extremes must agree.
+  single_statement = links_for(database_module.LINKS_CHUNK_SIZE)
+  many_statements = links_for(1)
+
+  assert many_statements == single_statement
+  assert single_statement[1] > 0  # the comparison above would be vacuous on an empty graph
+
+
+def test_empty_page_id_list_is_not_a_query(sqlite_database):
+  """An "IN ()" clause is a SQLite syntax error, so an empty frontier must issue no statement."""
+  assert sqlite_database.fetch_outgoing_links_count([]) == 0
+  assert list(sqlite_database.fetch_outgoing_links([])) == []
+
+
+def test_link_column_names_are_restricted(sqlite_database):
+  """The column name is interpolated, not bound, so it must be validated against an allowlist."""
+  with pytest.raises(ValueError):
+    sqlite_database.fetch_links_helper([1], 'outgoing_links; DROP TABLE pages')
+  with pytest.raises(ValueError):
+    sqlite_database.fetch_links_count_helper([1], 'title')

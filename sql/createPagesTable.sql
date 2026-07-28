@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS pages
 .separator "\t"
 .import /dev/stdin pages
 
-CREATE INDEX pages_title_index ON pages(title COLLATE NOCASE);
+CREATE INDEX IF NOT EXISTS pages_title_index ON pages(title COLLATE NOCASE);

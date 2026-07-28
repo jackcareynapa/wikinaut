@@ -42,7 +42,8 @@ for line in gzip.open(OUTGOING_LINKS_FILE, 'rt', encoding='utf-8', errors='surro
   source_page_id, target_page_ids = parts
   LINKS[source_page_id]['outgoing'] = target_page_ids
 if skipped_outgoing:
-  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_outgoing} malformed line(s) in outgoing links file',
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_outgoing} malformed line(s) in outgoing '
+        'links file',
         file=sys.stderr)
 
 skipped_incoming = 0
@@ -54,7 +55,8 @@ for line in gzip.open(INCOMING_LINKS_FILE, 'rt', encoding='utf-8', errors='surro
   target_page_id, source_page_ids = parts
   LINKS[target_page_id]['incoming'] = source_page_ids
 if skipped_incoming:
-  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_incoming} malformed line(s) in incoming links file',
+  print(f'[WARN] {SCRIPT_NAME}: skipped {skipped_incoming} malformed line(s) in incoming '
+        'links file',
         file=sys.stderr)
 
 # For each page in the links dictionary, print out its incoming and outgoing links as well as their

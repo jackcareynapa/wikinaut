@@ -8,4 +8,4 @@ CREATE TABLE IF NOT EXISTS searches
   t TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
 
-CREATE INDEX searches_ids_index ON searches(source_id, target_id);
+CREATE INDEX IF NOT EXISTS searches_ids_index ON searches(source_id, target_id);

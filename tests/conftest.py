@@ -40,9 +40,29 @@ def flask_app():
     os.chdir(old_cwd)
 
   server.app.config['TESTING'] = True
+
+  # The rate limiter stores counters in-process and this fixture is session-scoped, so leaving
+  # it armed would let one test's requests eat another's budget. Tests that exercise throttling
+  # turn it on through the rate_limited fixture below.
+  server.app.config['RATELIMIT_ENABLED'] = False
+
   return server.app
 
 
 @pytest.fixture()
 def client(flask_app):
   return flask_app.test_client()
+
+
+@pytest.fixture()
+def rate_limited(flask_app):
+  """Arms the rate limiter for one test, with counters cleared before and after."""
+  from sdow import server
+
+  flask_app.config['RATELIMIT_ENABLED'] = True
+  server.limiter.reset()
+  try:
+    yield server.limiter
+  finally:
+    flask_app.config['RATELIMIT_ENABLED'] = False
+    server.limiter.reset()

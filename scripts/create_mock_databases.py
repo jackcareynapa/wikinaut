@@ -68,8 +68,8 @@ for i in range(1, 36):
 
   is_redirect = 0 if i < 30 else 1
 
-  conn.execute('INSERT INTO pages VALUES ({0}, "{1}", {2});'.format(
-      prod_page_ids[i], page_name, is_redirect))
+  conn.execute('INSERT INTO pages VALUES (?, ?, ?);',
+               (prod_page_ids[i], page_name, is_redirect))
 
 
 # Create redirects table.
@@ -78,14 +78,15 @@ conn.execute(
     'CREATE TABLE redirects(source_id INTEGER PRIMARY KEY, target_id INTEGER NOT NULL)')
 
 for i in range(30, 35):
-  conn.execute('INSERT INTO redirects VALUES ({0}, {1});'.format(
-      prod_page_ids[i], prod_page_ids[1]))
+  conn.execute('INSERT INTO redirects VALUES (?, ?);',
+               (prod_page_ids[i], prod_page_ids[1]))
 
 
 # Create links table.
 conn.execute('DROP TABLE IF EXISTS links')
 conn.execute(
-    'CREATE TABLE links(id INTEGER PRIMARY KEY, outgoing_links_count INTEGER, incoming_links_count INTEGER, outgoing_links TEXT, incoming_links TEXT);')
+    'CREATE TABLE links(id INTEGER PRIMARY KEY, outgoing_links_count INTEGER, '
+    'incoming_links_count INTEGER, outgoing_links TEXT, incoming_links TEXT);')
 
 forward_links = [
     (1, [2, 4, 5, 10]),
@@ -127,8 +128,9 @@ for page_id, outgoing_links in forward_links:
   incoming_links = [prod_page_ids[i] for i in incoming_links]
   incoming_links = '|'.join(incoming_links)
 
-  conn.execute('INSERT INTO links VALUES ({0}, {1}, {2}, "{3}", "{4}");'.format(
-      prod_page_ids[page_id], outgoing_links_count, incoming_links_count, outgoing_links, incoming_links))
+  conn.execute('INSERT INTO links VALUES (?, ?, ?, ?, ?);',
+               (prod_page_ids[page_id], outgoing_links_count, incoming_links_count,
+                outgoing_links, incoming_links))
 
 conn.commit()
 conn.close()
@@ -143,8 +145,8 @@ build_csr(mock_sdow_database_filename, mock_csr_directory)
 
 print('[INFO] Creating mock searches database: {0}'.format(mock_searches_database_filename))
 
-# Recreate from scratch to keep this script idempotent: the shared schema creates an index
-# without IF NOT EXISTS, which would fail if run against an existing database.
+# Recreate from scratch so re-running this script yields a clean mock log rather than appending
+# to whatever a previous local session left behind.
 if os.path.exists(mock_searches_database_filename):
   os.remove(mock_searches_database_filename)
 

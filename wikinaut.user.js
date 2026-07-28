@@ -2,7 +2,7 @@
 // @name         Wikinaut
 // @namespace    https://github.com/jackcareynapa/wikinaut
 // @version      1.0.0
-// @description  Chart a course through Wikipedia — Wikinaut finds the shortest link-path to any article and flies you there through hyperspace.
+// @description  Chart a course through Wikipedia. Wikinaut finds the shortest link-path to any article and flies you there through hyperspace.
 // @author       jackcareynapa
 // @match        https://en.wikipedia.org/wiki/*
 // @grant        GM_xmlhttpRequest
@@ -10,7 +10,7 @@
 // @grant        GM_setValue
 // @connect      wikinaut-api.fly.dev
 // @connect      en.wikipedia.org
-// @connect      *
+// @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -19,6 +19,10 @@
 
   if (window.__wikinautLoaded) return;
   window.__wikinautLoaded = true;
+
+  // Hosts allowed to serve the backend over plain http. Everything else must be https,
+  // because a backend URL receives the article titles the player is routing between.
+  const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
 
   /**
    * Tuning:
@@ -81,8 +85,8 @@
     blueGlow: '#9FBBD9',
     dimWhite: '#9FA8BC',    // cool secondary text on the fascia
     parchment: '#E7DCC5',   // engraved label ivory + atlas chart lettering
+    ink: '#171A26',         // engraved dark text ON an accent-filled cap (the LAUNCH key)
     purple: '#9B8CC9',      // slate violet — alternate lane, warp-tunnel contrast ring
-    flash: '#FFF2D8',       // warm white jump flash
     streakA: '#FFD98A',     // hyperspace streaks: pale gold…
     streakB: '#E07A3F',     // …and deep ember
     signal: '#FF7052',      // faults only: errors, stalled state, warnings
@@ -411,7 +415,7 @@
        the emphasis when the pulse is silenced under reduced motion. */
     #wikinaut-panel[data-phase="course-ready"] #wikinaut-begin-button:not(:disabled) {
       background: linear-gradient(180deg, var(--wn-accent-glow) 0%, var(--wn-accent) 60%, var(--wn-accent-deep) 100%);
-      color: #171A26;
+      color: var(--wn-ink);
       font-weight: 700;
       text-shadow: 0 1px 0 rgba(255,255,255,0.25);
       box-shadow:
@@ -491,7 +495,7 @@
     .wikinaut-chart-grid line { stroke: rgba(var(--wn-blue-rgb),0.22); stroke-width: 0.4; }
     .wikinaut-chart-ring { fill: none; stroke: rgba(var(--wn-blue-rgb),0.26); stroke-width: 0.5; }
     .wikinaut-chart-tick { stroke: rgba(var(--wn-blue-rgb),0.35); stroke-width: 0.6; }
-    .wikinaut-chart-star { fill: #FFF6E4; }
+    .wikinaut-chart-star { fill: var(--wn-parchment); }
 
     /* The voyage line: a dotted survey track with the plotted course inked in gold on top. */
     #wikinaut-route-track {
@@ -841,10 +845,6 @@
       stroke-linejoin: round;
       opacity: 0.5;
     }
-    .wikinaut-ship-core {
-      fill: var(--wn-ship-color, ${PALETTE.blueGlow});
-      filter: drop-shadow(0 0 5px var(--wn-ship-color, ${PALETTE.blue}));
-    }
     .wikinaut-ship-thruster {
       fill: var(--wn-ship-color, ${PALETTE.blue});
       opacity: 0;
@@ -883,19 +883,6 @@
 
     .wikinaut-ship-body { transform-origin: 50% 50%; }
     #wikinaut-ship-shell[data-pose="victory"] .wikinaut-ship-body { animation: wikinaut-orbit 2.4s linear infinite; }
-    /* One engine-glow pulse covers every "holding" beat: idling, holding a lock at a link,
-       and charging the jump drive (faster while charging). The old per-pose hover/scan/
-       thrust/charge keyframes are gone — the flame flicker carries engine life. */
-    #wikinaut-ship-shell[data-pose="idle"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="look"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="look-out"] .wikinaut-ship-core { animation: wikinaut-core-pulse 2.4s ease-in-out infinite; }
-    #wikinaut-ship-shell[data-pose="grab"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="tug"] .wikinaut-ship-core,
-    #wikinaut-ship-shell[data-pose="timid"] .wikinaut-ship-core { animation: wikinaut-core-pulse 0.55s ease-in-out infinite; }
-    @keyframes wikinaut-core-pulse {
-      0%,100% { filter: drop-shadow(0 0 4px var(--wn-ship-color, ${PALETTE.blue})); }
-      50%     { filter: drop-shadow(0 0 11px var(--wn-accent-glow)); }
-    }
 
     @keyframes wikinaut-orbit { from { transform: rotate(0); } to { transform: rotate(360deg); } }
 
@@ -1195,7 +1182,6 @@
        loops or jitters. */
     @media (prefers-reduced-motion: reduce) {
       #wikinaut-ship-shell .wikinaut-ship-body,
-      #wikinaut-ship-shell .wikinaut-ship-core,
       #wikinaut-ship-shell .wikinaut-ship-flame-flicker,
       #wikinaut-root[data-shake="true"] #wikinaut-panel,
       .wikinaut-gantry, .wikinaut-smoke-puff,
@@ -1291,13 +1277,32 @@
       return Backend._stored();
     },
 
+    // Every charted course sends the player's current and destination article titles to this
+    // URL, so only http(s) origins are accepted: without a scheme check a typo (or a pasted
+    // "javascript:"/"data:" string) would be stored and handed to GM_xmlhttpRequest. Plain
+    // http is allowed for local development but not for a remote host, where it would put
+    // the titles on the wire in the clear.
+    isValidUrl(url) {
+      let parsed;
+      try {
+        parsed = new URL(String(url || '').trim());
+      } catch {
+        return false;
+      }
+      if (parsed.protocol === 'https:') return true;
+      return parsed.protocol === 'http:' && LOCAL_HOSTS.has(parsed.hostname);
+    },
+
+    // Returns true when the value was accepted (an empty value clears the override).
     set(url) {
       const value = String(url || '').trim().replace(/\/+$/, '');
+      if (value && !Backend.isValidUrl(value)) return false;
       try {
         if (typeof GM_setValue === 'function') GM_setValue(CONFIG.backendUrlKey, value);
         else if (value) localStorage.setItem(CONFIG.backendUrlKey, value);
         else localStorage.removeItem(CONFIG.backendUrlKey);
       } catch {}
+      return true;
     },
   };
 
@@ -1383,6 +1388,9 @@
       // The whole accent family follows the player's color — ship, streaks, and every
       // console accent. The -rgb triplets must be overridden in lockstep: dozens of rules
       // read rgba(var(--wn-accent-rgb), α) and would otherwise keep the stock gold.
+      // --wn-parchment/--wn-dim-white carry the console's body text, so they are tinted
+      // too; without them most of the panel's lettering stays stock ivory/blue-grey no
+      // matter what color the player picks.
       // Deliberately NOT overridden: --wn-signal (reserved fault red), --wn-blue/--wn-blue-glow
       // (graticule + next-waypoint distinction), --wn-purple (contrast lane/ring).
       const vars = {
@@ -1393,6 +1401,9 @@
         '--wn-accent-deep': cw.deep,
         '--wn-streak-a': cw.streakA,
         '--wn-streak-b': cw.streakB,
+        '--wn-parchment': cw.parchment,
+        '--wn-dim-white': cw.dimWhite,
+        '--wn-ink': cw.ink,
       };
       // The ship shell and jump layer leave #wikinaut-root while a journey is active
       // (JourneyPortal mounts them on document.body), so every var must be set on each
@@ -1845,7 +1856,14 @@
     });
 
     dom.backendInput.addEventListener('change', () => {
-      Backend.set(dom.backendInput.value);
+      if (!Backend.set(dom.backendInput.value)) {
+        // Put the still-active backend back in the field so the box never shows a value
+        // that isn't in effect.
+        dom.backendInput.value = Backend.override;
+        setStatus('Backend URL must be an https:// address (or http:// on localhost).',
+          {isError: true});
+        return;
+      }
       const where = Backend.override ? Backend.url : `default (${CONFIG.apiBaseUrl})`;
       setStatus(`Backend set to ${where}.`);
     });
@@ -2283,6 +2301,11 @@
     },
   };
 
+  // ─── Launch (engine, not FX) ──────────────────────────────────────────────────
+  // Everything below this marker is engine code. It lives here only because launching
+  // reads the charted route the atlas above just drew; keep the section header so the
+  // FX/engine boundary grep in CLAUDE.md does not mistake it for part of StarMap.
+
   async function beginWalk() {
     const route = runtime.route || Storage.load()?.route;
     if (!route || route.length < 2) {
@@ -2479,8 +2502,15 @@
       return safeDecode(raw).replace(/_/g, ' ');
     },
 
+    // Title → the /wiki/<title> path segment. Percent-encoding is required: real article
+    // titles contain '?' and '#' (e.g. "What's the Worst That Could Happen?"), and without
+    // encoding everything after those characters is parsed as a query string or fragment,
+    // so the direct-navigation fallback lands on the wrong page. ':' and '/' are put back
+    // because MediaWiki article paths carry them literally (namespaces and subpages).
     toUrlTitle(title) {
-      return title.trim().replace(/\s+/g, '_');
+      return encodeURIComponent(String(title ?? '').trim().replace(/\s+/g, '_'))
+        .replace(/%3A/gi, ':')
+        .replace(/%2F/gi, '/');
     },
 
     canonical(title) {
@@ -2666,8 +2696,8 @@
       // Swept-wing fighter drawn nose-right (heading 0°); the shell is rotated to the
       // craft's travel heading at runtime, and the hull is symmetric across its long
       // axis so every angle reads correctly and the engine plume trails behind. Hull
-      // tones come from <defs> gradients; .wikinaut-ship-core / .wikinaut-ship-thruster
-      // stay so the pose keyframes still drive the engine.
+      // tones come from <defs> gradients; the player's color reaches the craft through
+      // the flame plume, the flame-glow stops, and .wikinaut-ship-thruster.
       return `
         <svg viewBox="0 0 72 72" role="img" aria-label="Fighter spacecraft">
           <defs>
@@ -2710,7 +2740,6 @@
             <polygon class="wikinaut-ship-canopy" points="56,36 49,32 43,36 49,40"></polygon>
             <path class="wikinaut-ship-line" d="M20 36 H60"></path>
             <path class="wikinaut-ship-line" d="M38 31 V41 M28 31 V41"></path>
-            <circle class="wikinaut-ship-core" cx="13" cy="36" r="2.6"></circle>
           </g>
         </svg>
       `;
@@ -4084,6 +4113,16 @@
       streakB: mixHex(base, '#000000', 0.25),  // …and deep
       trailCore: mixHex(base, '#FFFFFF', 0.40),
       trailTail: mixHex(mixHex(base, '#808080', 0.30), '#000000', 0.30), // desaturated ember
+      // Console body text. These carry most of the panel's lettering, so they are mixed
+      // far enough toward white/grey to stay legible on the dark fascia at any hue while
+      // still reading as the player's color rather than a fixed ivory/blue-grey.
+      parchment: mixHex(base, '#FFFFFF', 0.80),  // engraved labels + atlas chart lettering
+      dimWhite: mixHex(mixHex(base, '#FFFFFF', 0.55), '#808080', 0.35),  // secondary text
+      // Engraved text ON the accent-filled LAUNCH cap. Dark rather than light because the
+      // cap's middle gradient stop (where the lettering sits) is the base color itself.
+      // Worst case is a dark saturated pick, which ensureReadable floors at 0.15 luminance
+      // and so caps contrast near 4:1 — still clear of WCAG AA for this 700-weight key.
+      ink: mixHex(base, '#000000', 0.88),
     };
   }
 

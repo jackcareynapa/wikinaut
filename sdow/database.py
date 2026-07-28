@@ -17,6 +17,46 @@ PATHS_CACHE_MAX_SIZE = 512
 # default 999-variable limit.
 PAGE_TITLES_CHUNK_SIZE = 500
 
+# The same limit applies to link lookups, where a wide BFS frontier can hold far more page IDs
+# than SQLite accepts host parameters in one statement.
+LINKS_CHUNK_SIZE = 500
+
+# The only column names the link helpers may interpolate. A column cannot be a bound parameter,
+# so the name is validated against these sets instead: callers are internal, and keeping the
+# check explicit means a future caller cannot turn a column argument into an injection point.
+LINKS_COUNT_COLUMNS = frozenset(('outgoing_links_count', 'incoming_links_count'))
+LINKS_COLUMNS = frozenset(('outgoing_links', 'incoming_links'))
+
+
+def _validated_column(column, allowed):
+  """Returns the column name if it is one of the allowed names.
+
+  Raises:
+    ValueError: If the column name is not in the allowed set.
+  """
+  if column not in allowed:
+    raise ValueError('Invalid column "{0}". Expected one of: {1}.'.format(
+        column, ', '.join(sorted(allowed))))
+  return column
+
+
+def _chunked(page_ids, chunk_size):
+  """Yields the provided page IDs in lists of at most chunk_size, skipping an empty input.
+
+  Skipping empty input matters: an "IN ()" clause is a SQLite syntax error.
+  """
+  page_ids = list(page_ids)
+  for chunk_start in range(0, len(page_ids), chunk_size):
+    yield page_ids[chunk_start:chunk_start + chunk_size]
+
+
+# The searches table is an append-only analytics log sharing a volume with the multi-GB graph,
+# so it is pruned rather than allowed to grow forever. Pruning runs every Nth insert instead of
+# every insert: the DELETE scans an unindexed timestamp column, which is not worth paying for
+# on a request that a player is waiting on.
+SEARCHES_RETENTION_DAYS = 90
+SEARCHES_PRUNE_EVERY_N_INSERTS = 1000
+
 
 class Database(object):
   """Wrapper for connecting to the SDOW database."""
@@ -38,6 +78,10 @@ class Database(object):
     # The graph database is opened read-only and immutable: nothing writes it while serving, and
     # immutable=1 lets SQLite skip all locking/change detection. If the file is ever replaced
     # under a running server (see the web-server-setup.md runbook), the app must be restarted.
+    # check_same_thread=False is safe ONLY because the cursors below are per-instance state and
+    # the Dockerfile runs gunicorn's default *sync* workers, so one process serves one request at
+    # a time. Switching to gthread/gevent workers would let concurrent requests share a cursor and
+    # interleave execute/fetch calls; that needs a connection pool or thread-local cursors first.
     self.sdow_conn = sqlite3.connect(
         'file:{0}?mode=ro&immutable=1'.format(urllib.parse.quote(sdow_database)),
         uri=True, check_same_thread=False)
@@ -61,6 +105,7 @@ class Database(object):
     self.searches_cursor.execute('PRAGMA synchronous = NORMAL;')
 
     self._paths_cache = OrderedDict()
+    self._searches_since_prune = 0
 
     # BFS neighbor lookups go through link_source (e.g. a memory-mapped CSRGraph); when none is
     # provided, this Database serves links itself from the SQLite links table.
@@ -107,7 +152,8 @@ class Database(object):
         return (current_page_id, helpers.get_readable_page_title(current_page_title), False)
 
     # If all the results are redirects, use the page to which the first result redirects.
-    query = 'SELECT target_id, title FROM redirects INNER JOIN pages ON pages.id = target_id WHERE source_id = ?;'
+    query = ('SELECT target_id, title FROM redirects '
+             'INNER JOIN pages ON pages.id = target_id WHERE source_id = ?;')
     query_bindings = (results[0][0],)
     self.sdow_cursor.execute(query, query_bindings)
 
@@ -165,8 +211,8 @@ class Database(object):
       target_page_id: The ID corresponding to the page at which to end the search.
 
     Returns:
-      list(list(int)): A list of integer lists corresponding to the page IDs indicating the shortest path
-        between the source and target page IDs.
+      list(list(int)): A list of integer lists corresponding to the page IDs indicating the
+        shortest path between the source and target page IDs.
 
     Raises:
       ValueError: If either of the provided page IDs are invalid.
@@ -215,19 +261,24 @@ class Database(object):
 
     Args:
       page_ids: A list of page IDs whose outgoing or incoming links to count.
+      incoming_or_outgoing_links_count: Which column to sum, "outgoing_links_count" or
+        "incoming_links_count".
 
     Returns:
       int: The count of outgoing or incoming links.
     """
-    page_ids = str(tuple(page_ids)).replace(',)', ')')
+    column = _validated_column(incoming_or_outgoing_links_count, LINKS_COUNT_COLUMNS)
+    total = 0
 
-    # There is no need to escape the query parameters here since they are never user-defined.
-    query = 'SELECT SUM({0}) FROM links WHERE id IN {1};'.format(
-        incoming_or_outgoing_links_count, page_ids)
-    self.sdow_cursor.execute(query)
+    for chunk in _chunked(page_ids, LINKS_CHUNK_SIZE):
+      query = 'SELECT SUM({0}) FROM links WHERE id IN ({1});'.format(
+          column, ','.join('?' * len(chunk)))
+      self.sdow_cursor.execute(query, chunk)
 
-    # SUM over zero rows is NULL; a page absent from the links table has zero links.
-    return self.sdow_cursor.fetchone()[0] or 0
+      # SUM over zero rows is NULL; a page absent from the links table has zero links.
+      total += self.sdow_cursor.fetchone()[0] or 0
+
+    return total
 
   def fetch_outgoing_links(self, page_ids):
     """Returns a list of tuples of page IDs representing outgoing links from the list of provided
@@ -269,47 +320,58 @@ class Database(object):
         pipe-separated TEXT storage format is a detail of this SQLite adapter; CSRGraph serves
         the same contract from flat arrays.
     """
-    # Snapshot the page IDs and run the query eagerly: the BFS passes a live dict-keys view and
+    # Snapshot the page IDs and run the queries eagerly: the BFS passes a live dict-keys view and
     # clears the dict before iterating the result. Only the string parsing is lazy.
-    #
-    # Convert the page IDs into a string surrounded by parentheses for insertion into the query
-    # below. The replace() bit is some hackery to handle Python printing a trailing ',' when there
-    # is only one key.
-    page_ids = str(tuple(page_ids)).replace(',)', ')')
+    column = _validated_column(outcoming_or_incoming_links, LINKS_COLUMNS)
+    rows = []
 
-    # There is no need to escape the query parameters here since they are never user-defined.
-    query = 'SELECT id, {0} FROM links WHERE id IN {1};'.format(
-        outcoming_or_incoming_links, page_ids)
-    self.sdow_cursor.execute(query)
-    rows = self.sdow_cursor.fetchall()
+    for chunk in _chunked(page_ids, LINKS_CHUNK_SIZE):
+      query = 'SELECT id, {0} FROM links WHERE id IN ({1});'.format(
+          column, ','.join('?' * len(chunk)))
+      self.sdow_cursor.execute(query, chunk)
+      rows.extend(self.sdow_cursor.fetchall())
 
     return (
         (page_id, [int(token) for token in links_string.split('|') if token])
         for page_id, links_string in rows)
 
   def insert_result(self, search):
-    """Inserts a new search result into the searches table.
+    """Inserts a new search result into the searches table, pruning old rows periodically.
 
     Args:
-      results: A dictionary containing search information.
+      search: A dictionary containing search information.
 
-    Returns: 
+    Returns:
       None
     """
     paths_count = len(search['paths'])
+    degrees_count = None if paths_count == 0 else len(search['paths'][0]) - 1
 
-    if paths_count == 0:
-      degrees_count = 'NULL'
-    else:
-      degrees_count = len(search['paths'][0]) - 1
-
-    # There is no need to escape the query parameters here since they are never user-defined.
-    query = 'INSERT INTO searches VALUES ({source_id}, {target_id}, {duration}, {degrees_count}, {paths_count}, CURRENT_TIMESTAMP);'.format(
-        source_id=search['source_id'],
-        target_id=search['target_id'],
-        duration=search['duration'],
-        degrees_count=degrees_count,
-        paths_count=paths_count,
+    query = ('INSERT INTO searches (source_id, target_id, duration, degrees_count, paths_count, t) '
+             'VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP);')
+    query_bindings = (
+        search['source_id'],
+        search['target_id'],
+        search['duration'],
+        degrees_count,
+        paths_count,
     )
-    self.searches_conn.execute(query)
+    self.searches_conn.execute(query, query_bindings)
     self.searches_conn.commit()
+
+    self._searches_since_prune += 1
+    if self._searches_since_prune >= SEARCHES_PRUNE_EVERY_N_INSERTS:
+      self._searches_since_prune = 0
+      self.prune_old_searches()
+
+  def prune_old_searches(self):
+    """Deletes search-log rows older than the retention window.
+
+    Returns:
+      int: The number of rows deleted.
+    """
+    query = "DELETE FROM searches WHERE t < datetime('now', ?);"
+    query_bindings = ('-{0} days'.format(SEARCHES_RETENTION_DAYS),)
+    cursor = self.searches_conn.execute(query, query_bindings)
+    self.searches_conn.commit()
+    return cursor.rowcount
