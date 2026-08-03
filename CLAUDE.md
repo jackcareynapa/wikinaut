@@ -52,12 +52,14 @@ src/              Userscript SOURCE, split by layer: ui/ (console, autocomplete,
 sql/              SQLite table schemas
 tests/            Backend pytest suite; runs against the mock graph, no network needed
 docs/             web-server-setup.md (Fly.io deploy) and data-source.md (graph build)
-.github/          CONTRIBUTING.md and the Dependabot config
+.github/          CONTRIBUTING.md, the Dependabot config, and workflows/ci.yml (userscript
+                  build/lint + backend lint/tests on every push and PR)
 wikinaut.user.js  GENERATED: the built Tampermonkey userscript. Committed because README
                   and docs link players straight at it for install. Never hand-edit.
 Dockerfile        Backend container image (used by the Fly.io deploy)
 fly.toml          Fly.io app config
-requirements.txt  Runtime deps (requirements-dev.txt adds pytest); setup.cfg is lint config
+requirements.txt  Runtime deps (requirements-dev.txt adds pytest + pycodestyle); setup.cfg is
+                  lint config
 ```
 
 ## The build pipeline: the `pagelinks` to `linktarget` schema change
