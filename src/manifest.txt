@@ -1,0 +1,52 @@
+# Build order for wikinaut.user.js — see scripts/build_userscript.py.
+#
+# These fragments share ONE lexical scope (the userscript IIFE), so there are no imports:
+# every fragment can see every other fragment's top-level names. src/header.js is not
+# listed here — it is the ==UserScript== metadata block and is emitted outside the IIFE.
+#
+# ORDER IS LOAD-BEARING and is not a stylistic choice. Function declarations hoist, but
+# several top-level `const` initializers run at evaluation time and read earlier ones:
+# SETTINGS_DEFAULTS reads PALETTE.accent, and the CSS template literal interpolates
+# PALETTE_CSS_VARS, TYPE, and CONFIG. Reordering config.js/styles.js relative to their
+# dependents throws a TDZ ReferenceError on load. init.js must stay last: it ends with the
+# init() call that starts the script.
+
+prelude.js
+config.js
+styles.js
+state.js
+
+engine/backend.js
+ui/settings.js
+
+fx/fx-loop.js
+fx/trail.js
+
+ui/panel.js
+ui/status.js
+ui/autocomplete.js
+ui/flow.js
+fx/star-map.js
+
+engine/launch.js
+engine/routing.js
+engine/titles.js
+engine/storage.js
+engine/session-cache.js
+
+fx/portal.js
+ui/dock.js
+fx/figure.js
+fx/launch-sequence.js
+
+engine/traversal.js
+engine/links.js
+fx/link-fx.js
+fx/transition.js
+
+util/net.js
+util/anim.js
+util/color.js
+util/text.js
+
+init.js

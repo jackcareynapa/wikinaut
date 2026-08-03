@@ -9,7 +9,7 @@ It has two parts:
 
 - **Userscript** (`wikinaut.user.js`): a Tampermonkey script that runs on Wikipedia, draws the
   console, takes a destination, and drives the link-by-link flight (with a hyperspace jump between
-  pages).
+  pages). It is built from the source fragments in `src/` by `scripts/build_userscript.py`.
 - **Backend** (`sdow/`): a Python/Flask API, forked from
   [jwngr/sdow](https://github.com/jwngr/sdow) (Six Degrees of Wikipedia), that does the
   shortest-path search over the multi-gigabyte Wikipedia link graph. The browser cannot hold the
@@ -76,6 +76,18 @@ cd scripts/ && ./buildDatabase.sh            # latest dump, or ./buildDatabase.s
 The build downloads the `page`, `redirect`, `pagelinks`, and `linktarget` dumps and processes them
 into a single SQLite graph (`scripts/dump/wikinaut.sqlite`). See
 [Data Source](./docs/data-source.md) for details.
+
+## Build the userscript
+
+`wikinaut.user.js` is generated — the source lives in `src/`, split by layer (`ui/`, `engine/`,
+`fx/`, `util/`). Edit a fragment there and rebuild:
+
+```bash
+python scripts/build_userscript.py            # write wikinaut.user.js
+python scripts/build_userscript.py --check    # verify it matches src/ (exits 1 on drift)
+```
+
+The built file is committed so the install link above always works. Don't edit it by hand.
 
 ## Deploy the backend
 

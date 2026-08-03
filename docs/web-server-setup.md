@@ -272,7 +272,10 @@ malformed request should come back as a `400` (not a `500`) with a `code` field.
 
 The userscript ([`wikinaut.user.js`](../wikinaut.user.js)) already defaults to
 `https://wikinaut-api.fly.dev` (`CONFIG.apiBaseUrl`). If you used a different Fly app name, update
-that constant **and** the matching `@connect` directive in the script header.
+that constant **and** the matching `@connect` directive in the script header. Both live in the
+userscript *source*, not the built file: `CONFIG.apiBaseUrl` in
+[`src/config.js`](../src/config.js) and `@connect` in [`src/header.js`](../src/header.js). Run
+`python scripts/build_userscript.py` afterwards to regenerate `wikinaut.user.js`.
 
 Anyone can also override the backend at runtime via the panel's **Settings → Backend URL** field,
 which is how you point at a local `flask run` during development (see

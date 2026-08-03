@@ -2,7 +2,8 @@
 
 There are two pieces:
 
-1. **Userscript** (`wikinaut.user.js`): the Tampermonkey frontend, and where most new work happens.
+1. **Userscript** (`src/`, built into `wikinaut.user.js`): the Tampermonkey frontend, and where
+   most new work happens.
 2. **Backend**: the Python/Flask API (`sdow/`) plus the graph build scripts (`scripts/`), forked
    from [jwngr/sdow](https://github.com/jwngr/sdow) and updated for the 2024 Wikipedia schema
    change.
@@ -112,22 +113,52 @@ check. Behind Fly the client IP comes from the `Fly-Client-IP` header, falling b
    **⚙ Settings → Backend URL** with `http://localhost:5000` (you may need to approve the
    `@connect` prompt).
 3. Open an English Wikipedia article and iterate.
-4. Syntax-check before committing: `node --check wikinaut.user.js`.
+4. Rebuild and syntax-check before committing:
+   `python scripts/build_userscript.py && node --check wikinaut.user.js`.
 
-The userscript keeps a clean split between the **engine** (`Routing`, `Titles`, `Storage`, `Links`,
-`Traversal`) and the **cosmetic layer** (`Figure`/ship, `Trail`, `Transition`/hyperspace, CSS). FX
-modules must never call `Phase.set`, `setStatus`, `Storage.save`/`clear`, or `link.click()`. The
-trickiest code is the DOM link-matching in `Links`; be careful there.
+### `wikinaut.user.js` is generated — edit `src/`
 
-`node --check` catches only syntax. Real verification means driving the script against live
-Wikipedia in a browser, or with a throwaway Playwright harness that shims the `GM_*` APIs and mocks
-the backend.
+The shipped userscript is assembled from the fragments in `src/` by
+[`scripts/build_userscript.py`](../scripts/build_userscript.py). **Never hand-edit
+`wikinaut.user.js`**; your change will be overwritten by the next build.
+`python scripts/build_userscript.py --check` exits 1 with a diff when the committed file has
+drifted from the sources, so run it before you push. The built file stays committed because
+[the install instructions](../README.md) point players straight at it.
+
+The fragments are **not ES modules** — no `import`, no `export`, no bundler. The userscript is one
+IIFE sharing a single scope, and the build is plain text concatenation in the order given by
+`src/manifest.txt`. So:
+
+- Fragments keep the two-space indentation they carry inside the IIFE. Don't dedent them.
+- A new fragment must be added to `src/manifest.txt` or it silently won't ship.
+- Manifest order matters: `config.js` and `styles.js` are evaluated by later fragments at load
+  time, and `init.js` must stay last.
+
+The layout mirrors the split the userscript already enforces between the **engine**
+(`src/engine/`: routing, titles, storage, links, traversal), the **cosmetic layer** (`src/fx/`:
+ship, trail, star map, hyperspace), the **console UI** (`src/ui/`), and shared helpers
+(`src/util/`). Nothing in `src/fx/` may call `Phase.set`, `setStatus`, `Storage.save`/`clear`, or
+`link.click()` — check with:
+
+```bash
+grep -rn 'Phase\.set\|setStatus\|Storage\.\(save\|clear\)\|\.click()' src/fx/ | grep -v ':\s*//'
+```
+
+The trickiest code is the DOM link-matching in `src/engine/links.js`; be careful there.
+
+The build check and `node --check` only prove the file is in sync and parses. Real verification
+means driving the built script against live Wikipedia in a browser, or with a throwaway Playwright
+harness that shims the `GM_*` APIs and mocks the backend.
 
 ## Validation checklist
 
 ```bash
-# Userscript syntax
+# Userscript: rebuild from src/, then syntax-check the built file
+python scripts/build_userscript.py
 node --check wikinaut.user.js
+
+# ...or, if you have already rebuilt, just confirm the committed file matches src/
+python scripts/build_userscript.py --check
 
 # Backend tests: run against the mock graph (conftest.py regenerates it), no network needed.
 # Cover shortest-path correctness, CSR/SQLite parity, malformed-request handling, abuse limits,
@@ -182,7 +213,11 @@ curl -X POST localhost:8085/paths -H 'content-type: application/json' -d '{"sour
   - `helpers.py`: title sanitization, validation, and error classes
 - `sql/`: SQLite table schemas
 - `tests/`: backend pytest suite (runs against the mock graph, no network needed)
-- `wikinaut.user.js`: the Tampermonkey userscript (frontend)
+- `src/`: userscript source, split by layer — `ui/` (console, autocomplete, chart flow),
+  `engine/` (routing, titles, storage, links, traversal), `fx/` (ship, trail, star map,
+  hyperspace), `util/` (net, anim, color, text), plus `config.js`, `styles.js` (the CSS),
+  `state.js`, `init.js`, and `manifest.txt` (build order)
+- `wikinaut.user.js`: the built Tampermonkey userscript — **generated from `src/`**, don't edit
 - `Dockerfile` / `fly.toml`: backend container and Fly.io deploy config
 - `requirements.txt`: Python dependencies (`requirements-dev.txt` adds `pytest`)
 - `setup.cfg`: Python lint/format config
