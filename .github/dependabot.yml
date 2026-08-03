@@ -12,3 +12,14 @@ updates:
       minor-and-patch:
         patterns: ['*']
         update-types: ['minor', 'patch']
+
+  # Keep the CI workflow's action pins current; without this they silently rot.
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'quarterly'
+    cooldown:
+      default-days: 2
+    groups:
+      actions:
+        patterns: ['*']

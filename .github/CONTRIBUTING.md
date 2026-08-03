@@ -173,14 +173,26 @@ python3 -m py_compile scripts/*.py sdow/*.py
 # Shell build script syntax
 bash -n scripts/buildDatabase.sh
 
-# Python style (dev tools, installed separately; they are NOT in requirements.txt)
-pip install pycodestyle autopep8
+# Python style (pycodestyle ships in requirements-dev.txt; autopep8 is separate)
 pycodestyle --config=setup.cfg sdow/ scripts/
+pip install autopep8
 autopep8 --diff --recursive sdow/ scripts/   # drop --diff and add --in-place to apply
 ```
 
 Style is 2-space indentation, ~100-character lines, PEP 8 (config in [`setup.cfg`](../setup.cfg)).
 The graph build scripts are Python 3.
+
+### CI runs a subset of this
+
+[`.github/workflows/ci.yml`](./workflows/ci.yml) runs on every push to `main` and every pull
+request, in two jobs:
+
+- **Userscript** — `build_userscript.py --check` (the committed `wikinaut.user.js` must match
+  `src/`), `node --check`, and the `src/fx/` boundary grep.
+- **Backend** — `pycodestyle` and `pytest` on Python 3.12, matching the Dockerfile's base image.
+
+CI does *not* cover the container smoke test below, the graph build, or any real flight against
+live Wikipedia. Those stay manual.
 
 ## Local container smoke test
 
@@ -219,5 +231,5 @@ curl -X POST localhost:8085/paths -H 'content-type: application/json' -d '{"sour
   `state.js`, `init.js`, and `manifest.txt` (build order)
 - `wikinaut.user.js`: the built Tampermonkey userscript — **generated from `src/`**, don't edit
 - `Dockerfile` / `fly.toml`: backend container and Fly.io deploy config
-- `requirements.txt`: Python dependencies (`requirements-dev.txt` adds `pytest`)
+- `requirements.txt`: Python dependencies (`requirements-dev.txt` adds `pytest` and `pycodestyle`)
 - `setup.cfg`: Python lint/format config
