@@ -2,6 +2,7 @@
 .git
 .github
 scripts
+src
 docs
 tests
 env

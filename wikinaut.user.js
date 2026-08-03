@@ -13,6 +13,9 @@
 // @connect      localhost
 // @run-at       document-idle
 // ==/UserScript==
+//
+// GENERATED FILE — do not edit. Built from src/ by scripts/build_userscript.py; edit the
+// fragment under src/ and rebuild. `build_userscript.py --check` fails on hand-edits here.
 
 (function wikinautUserscript() {
   'use strict';
@@ -1420,8 +1423,6 @@
     },
   };
 
-  // ─── Trail canvas (white-hot → ship color → derived-tail particle wake) ────────
-
   // ─── FxLoop (single rAF owner) ────────────────────────────────────────────────
   // One requestAnimationFrame chain drives every per-frame consumer (the Trail canvas and
   // animate()'s tweens) instead of each running its own competing loop. Subscribers are
@@ -1463,6 +1464,8 @@
       if (FxLoop._subs.size) FxLoop._rafId = requestAnimationFrame(FxLoop._tick);
     },
   };
+
+  // ─── Trail canvas (white-hot → ship color → derived-tail particle wake) ────────
 
   const Trail = {
     canvas: null,

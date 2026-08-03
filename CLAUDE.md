@@ -24,7 +24,7 @@ split:
    *all* shortest paths for a query, which is what powers route selection.
    Deployed to Fly.io (see `docs/web-server-setup.md`).
 
-2. **Frontend (`wikinaut.user.js`, the Tampermonkey userscript)**: runs on
+2. **Frontend (`src/`, built into `wikinaut.user.js`, the Tampermonkey userscript)**: runs on
    `en.wikipedia.org` article pages. Injects the console panel, takes a
    destination, calls the backend for the path(s), lets the player pick, then drives
    navigation link-by-link. This is the new code unique to this project.
@@ -43,12 +43,18 @@ sdow/             Python package: server.py (Flask app, validation, abuse limits
                   breadth_first_search.py (the algorithm), database.py,
                   csr_graph.py (memory-mapped link arrays), helpers.py
 scripts/          buildDatabase.sh and friends: download and process Wikipedia dumps into
-                  SQLite; build_csr_graph.py (SQLite links to CSR arrays), benchmark_paths.py
+                  SQLite; build_csr_graph.py (SQLite links to CSR arrays), benchmark_paths.py;
+                  build_userscript.py assembles the frontend from src/
+src/              Userscript SOURCE, split by layer: ui/ (console, autocomplete, chart flow),
+                  engine/ (routing, titles, storage, links, traversal), fx/ (ship, trail,
+                  star map, hyperspace), util/ (net, anim, color, text), plus config.js,
+                  styles.js (the CSS literal), state.js, init.js, and manifest.txt (build order)
 sql/              SQLite table schemas
 tests/            Backend pytest suite; runs against the mock graph, no network needed
 docs/             web-server-setup.md (Fly.io deploy) and data-source.md (graph build)
 .github/          CONTRIBUTING.md and the Dependabot config
-wikinaut.user.js  The Tampermonkey userscript (Wikinaut frontend)
+wikinaut.user.js  GENERATED: the built Tampermonkey userscript. Committed because README
+                  and docs link players straight at it for install. Never hand-edit.
 Dockerfile        Backend container image (used by the Fly.io deploy)
 fly.toml          Fly.io app config
 requirements.txt  Runtime deps (requirements-dev.txt adds pytest); setup.cfg is lint config
@@ -125,6 +131,27 @@ article. Five things to handle:
   URL. `Titles.toUrlTitle` percent-encodes for this path, which matters because real titles
   contain `?` and `#`.
 
+## The frontend build: `src/` fragments, not ES modules
+
+`wikinaut.user.js` is **generated**. Edit `src/`, then run `python scripts/build_userscript.py`.
+`--check` re-runs the build in memory and exits 1 with a diff if the committed file has drifted,
+so hand-edits to the built file are caught rather than silently overwritten.
+
+The fragments are **not ES modules**: no `import`, no `export`, no bundler. The whole userscript
+is one IIFE sharing one lexical scope, and the build is plain text concatenation in the order
+`src/manifest.txt` gives. Every fragment can therefore see every other fragment's top-level
+names, exactly as when it was one file. Consequences worth knowing:
+
+- **Fragments keep their two-space indentation.** They are IIFE-body text. Don't dedent them.
+- **Manifest order is load-bearing, not stylistic.** Function declarations hoist, but several
+  top-level `const` initializers run at load: `SETTINGS_DEFAULTS` reads `PALETTE.accent`, and the
+  `CSS` literal interpolates `PALETTE_CSS_VARS`/`TYPE`/`CONFIG`. Moving `config.js` or
+  `styles.js` past a dependent throws a TDZ `ReferenceError`. `init.js` stays last; it ends with
+  the `init()` call.
+- **A new fragment must be added to `manifest.txt`** or it is silently absent from the build. A
+  manifest entry with no file is a hard error.
+- `src/header.js` is the `==UserScript==` metadata block and is emitted *outside* the IIFE.
+
 ## Userscript conventions
 
 - Call the backend with **`GM_xmlhttpRequest`**, not `fetch`. A plain `fetch` from a
@@ -172,27 +199,39 @@ article. Five things to handle:
   without code edits.
 - **The graph build is the risky area.** Any task touching dump processing must preserve
   the `linktarget` join (above) and stay Python 3 compatible.
-- **Frontend changes** are in `wikinaut.user.js`. The high-value, high-difficulty code is
-  the DOM link-matching (`Links`) and navigation (`Traversal`/`Transition`), not the
-  pathfinding.
+- **Frontend changes** are made in `src/` and built into `wikinaut.user.js` (never edited
+  directly); rebuild and commit both. The high-value, high-difficulty code is the DOM
+  link-matching (`src/engine/links.js`) and navigation (`src/engine/traversal.js`,
+  `src/fx/transition.js`), not the pathfinding.
 - **Verifying backend changes:** run `pytest tests/`. The suite covers shortest-path
   correctness, CSR/SQLite parity, malformed-request handling, the abuse limits, and
   search-log retention, all against the mock graph with no network access.
 - **Verifying frontend changes:** there is no checked-in test suite for the userscript, and
-  `node --check` only catches syntax. Real verification means driving the actual script with
+  `build_userscript.py --check` plus `node --check` only prove it is in sync and parses.
+  Real verification means driving the built script with
   a throwaway Playwright harness against live `en.wikipedia.org`: shim `GM_*` (mock the
   `/paths` backend) via `addInitScript`, inject the script body with `page.evaluate`
   (bypasses Wikipedia's CSP, unlike `addScriptTag`), then assert on real flights: landings,
   statuses, storage, screenshots. Don't sign off frontend work on static reading alone.
-- Keep the **FX/engine boundary** mechanically clean: `Figure`/`Trail`/`Transition`/
-  `LaunchSequence`/`LinkFx`/`FxLoop`/`StarMap` must never call `Phase.set`, `setStatus`,
-  `Storage.save/clear`, or `link.click()`. Grep for these in FX modules before finishing
-  any frontend change.
+- Keep the **FX/engine boundary** mechanically clean: nothing in `src/fx/` may call
+  `Phase.set`, `setStatus`, `Storage.save/clear`, or `link.click()`. The layout makes this a
+  directory check — run it before finishing any frontend change (the `grep -v` drops the
+  comments that mention the rule):
+
+  ```bash
+  grep -rn 'Phase\.set\|setStatus\|Storage\.\(save\|clear\)\|\.click()' src/fx/ | grep -v ':\s*//'
+  ```
 - Stay in **Python** for backend work (project owner's primary language).
 
 ## Common commands
 
 ```bash
+# Frontend: rebuild wikinaut.user.js from src/ (do this after EVERY src/ edit)
+python scripts/build_userscript.py
+
+# Verify the committed userscript matches src/ (exits 1 with a diff if it drifted)
+python scripts/build_userscript.py --check
+
 # Backend: set up environment (from repo root)
 virtualenv env && source env/bin/activate && pip install -r requirements.txt
 
@@ -205,8 +244,8 @@ cd sdow/ && export FLASK_APP=server.py FLASK_DEBUG=1 && flask run
 # Backend test suite (mock graph, no network)
 pip install -r requirements-dev.txt && pytest tests/ -v
 
-# Lint the userscript and the Python
-node --check wikinaut.user.js
+# Lint the userscript and the Python (node --check runs on the BUILT file)
+python scripts/build_userscript.py && node --check wikinaut.user.js
 pycodestyle --config=setup.cfg sdow/ scripts/
 
 # Build the full graph from a Wikipedia dump (hours; does the linktarget join)
