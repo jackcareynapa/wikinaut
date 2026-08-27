@@ -25,7 +25,7 @@
       }
 
       // Let the bay doors part and the hangar mouth appear before the craft rises.
-      await sleep(260);
+      await sleep(beat(260));
       const from = LaunchSequence.padPosition();
       Figure.moveTo(from.x, from.y + 26);
       Figure.show();
@@ -33,12 +33,12 @@
       // Rise out of the bay onto the pad. The pad is re-measured every frame: if the
       // panel is still settling (the route card's expansion can overlap a quick Launch
       // press), the ship tracks the live rect instead of arming against a stale one.
-      await animate(430, (p) => {
+      await animate(beat(430), (p) => {
         const pad = LaunchSequence.padPosition();
         const eased = 1 - easeInCubic(1 - p);
         Figure.moveTo(pad.x, pad.y + 26 * (1 - eased));
       });
-      await sleep(140);
+      await sleep(beat(140));
     },
 
     // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it.
@@ -46,7 +46,7 @@
       for (const n of [3, 2, 1]) {
         if (onTick) onTick(n);
         LaunchSequence.showDigit(String(n), reduce);
-        await sleep(reduce ? 140 : 760);
+        await sleep(reduce ? beat(140) : beat(760));
       }
       LaunchSequence.hideDigit();
     },
@@ -57,7 +57,7 @@
       const pad = LaunchSequence.padPosition();
       Figure.pose('grab');
       if (!reduce) {
-        await animate(300, (p) => {
+        await animate(beat(300), (p) => {
           Figure.moveTo(pad.x, pad.y + Math.sin(p * Math.PI) * 6);
         });
       }
@@ -87,8 +87,8 @@
       if (reduce) {
         Figure.moveTo(start.x, riseY);
       } else {
-        await sleep(170);
-        await animate(1000, (progress) => {
+        await sleep(beat(170));
+        await animate(beat(1000), (progress) => {
           const eased = easeInCubic(progress);
           Figure.moveTo(start.x, lerp(start.y, riseY, eased));
           Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
@@ -137,7 +137,7 @@
           {transform: 'scale(1.15)', opacity: 1, offset: 0.4},
           {transform: 'scale(1)', opacity: 1},
         ],
-        {duration: 560, easing: 'cubic-bezier(.2,.8,.2,1)'},
+        {duration: beat(560), easing: 'cubic-bezier(.2,.8,.2,1)'},
       );
     },
 

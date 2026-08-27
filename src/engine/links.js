@@ -20,9 +20,9 @@
       return chosen.link;
     },
 
-    // Returns [{link, rect}] — each candidate's bounding rect is measured exactly once here
-    // and every scorer/sorter reads the cached rect (a per-comparison getBoundingClientRect
-    // in the sort paths forced repeated layout reads on link-dense pages).
+    // Returns [{link, rect}] — each candidate's anchor rect is measured exactly once here and
+    // every scorer/sorter reads the cached rect (a per-comparison measurement in the sort
+    // paths forced repeated layout reads on link-dense pages).
     candidates(title, aliases = []) {
       const root =
         document.querySelector(SELECTORS.articleBody) ||
@@ -35,7 +35,9 @@
       for (const link of root.querySelectorAll(SELECTORS.articleLink)) {
         if (!Links.isArticleLinkHref(link)) continue;
         if (!Links.matchesTitle(link, title, aliases)) continue;
-        const rect = link.getBoundingClientRect();
+        // The ANCHOR fragment, not the union rect (see anchorRect): on a wrapped link the
+        // union spans both lines and the whole column, which skewed every scorer below.
+        const rect = anchorRect(link);
         if (!Links.isRendered(link, {rect})) continue;
         entries.push({link, rect});
       }
@@ -209,9 +211,7 @@
     },
 
     visibilityScore(rect) {
-      const visW = Math.max(0, Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0));
-      const visH = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
-      return (visW * visH) / Math.max(rect.width * rect.height, 1);
+      return viewportOverlap(rect);
     },
 
     distanceFromFigure(rect) {

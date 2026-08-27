@@ -91,17 +91,23 @@
         `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) rotate(${runtime.figureAngle.toFixed(1)}deg)`;
     },
 
-    targetAtLink(link) {
-      // Land the ship centered on the link itself. No panel Y-clamp — the ship flies
-      // above the console (z-index) and is free to set down anywhere on screen.
-      const rect = link.getBoundingClientRect();
-      const linkCenterX = rect.left + rect.width / 2;
-      const linkCenterY = rect.top + rect.height / 2;
-      return {
-        x: clamp(linkCenterX - CONFIG.figureSize / 2, 8, window.innerWidth - CONFIG.figureSize - 8),
-        y: clamp(linkCenterY - CONFIG.figureSize / 2, 8, window.innerHeight - CONFIG.figureSize - 8),
-        slitX: linkCenterX,
-        slitY: linkCenterY,
-      };
+    // Where the ship sets down for a given target rect, and the single point every anchored
+    // FX layer (reticle, landing burst, jump slit) must share with it.
+    //
+    // Takes a RECT, not a link: the engine measures once with anchorRect() and hands the same
+    // fragment to every consumer. Measuring here per-consumer produced up to nine independent
+    // reads per touchdown, interleaved with layout mutations.
+    //
+    // slitX/slitY are derived from the CLAMPED ship position, never from the raw rect center.
+    // They used to be the unclamped center, so any link within ~64px of a viewport edge parked
+    // the ship at the clamp while the reticle, burst and hyperspace opened somewhere else —
+    // and the jump then teleported the ship across that gap.
+    targetAtRect(rect) {
+      // No panel Y-clamp — the ship flies above the console (z-index) and is free to set
+      // down anywhere on screen.
+      const half = CONFIG.figureSize / 2;
+      const x = clamp(rect.left + rect.width / 2 - half, 8, window.innerWidth - CONFIG.figureSize - 8);
+      const y = clamp(rect.top + rect.height / 2 - half, 8, window.innerHeight - CONFIG.figureSize - 8);
+      return {x, y, slitX: x + half, slitY: y + half};
     },
   };

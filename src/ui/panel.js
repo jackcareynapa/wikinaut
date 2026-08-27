@@ -179,6 +179,8 @@
       const val = Number(dom.speedSlider.value);
       dom.speedValue.textContent = `${val} px/s`;
       Settings.save({walkingPixelsPerSecond: val});
+      // Speed also drives the beat tempo (--wn-tempo), so the warp CSS has to be re-published.
+      Settings.applyToDom();
     });
 
     dom.travelerColorInput.addEventListener('input', () => {

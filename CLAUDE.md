@@ -47,7 +47,7 @@ scripts/          buildDatabase.sh and friends: download and process Wikipedia d
                   build_userscript.py assembles the frontend from src/
 src/              Userscript SOURCE, split by layer: ui/ (console, autocomplete, chart flow),
                   engine/ (routing, titles, storage, links, traversal), fx/ (ship, trail,
-                  star map, hyperspace), util/ (net, anim, color, text), plus config.js,
+                  star map, hyperspace), util/ (net, geom, anim, color, text), plus config.js,
                   styles.js (the CSS literal), state.js, init.js, and manifest.txt (build order)
 sql/              SQLite table schemas
 tests/            Backend pytest suite; runs against the mock graph, no network needed
@@ -119,6 +119,14 @@ article. Five things to handle:
   through `Titles.rawFromHref` (URL parse, same-hostname, and `/wiki/` pathname check,
   which also rejects Commons/Wiktionary links containing "/wiki/") and select with
   `SELECTORS.articleLink`.
+- **Never measure a link with `getBoundingClientRect`.** An `<a>` that wraps across two lines
+  has two layout fragments, and the bounding rect is their UNION — a box spanning both lines and
+  usually the whole column, whose center sits between the lines over unrelated text. The ship
+  then lands "near" the link and tears the jump slit open in blank space, deterministically, on
+  every wrapped link. Measure with `anchorRect` (`src/util/geom.js`), which picks the real
+  fragment out of `getClientRects()`. One measurement per touchdown, passed to every consumer —
+  and the ship's landing point and the jump slit must come from the same `Figure.targetAtRect`
+  call, or a viewport-edge clamp splits them.
 - **Phantom rects in collapsed navboxes.** MediaWiki collapses navbox rows with
   `hidden="until-found"` (`content-visibility: hidden`). Links inside keep a NONZERO
   bounding rect while unpainted, so display/visibility/zero-rect checks all pass and the
@@ -181,9 +189,20 @@ names, exactly as when it was one file. Consequences worth knowing:
   invisible to the player.
 - **The cruise is document-space.** `Traversal.cruiseToLink` plans one cubic Bézier per hop in
   document coordinates; the page scroll is the camera (time-based lock plus a hard frame guard
-  so the ship can never leave the viewport). The flight-speed setting is always honored.
-  `CONFIG.maxCruiseDurationMs` is a safety net for pathological hops, **not a pacing knob**;
-  lowering it silently overrides the player's speed slider on long flights.
+  so the ship can never leave the viewport). Re-measure the target and the scroll ceiling as the
+  flight runs: lazy images resolve *because* the cruise scrolls, so both drift.
+- **Pacing: cap the flown distance, never the duration.** `planCruise` (`util/anim.js`) derives
+  the hop duration *from* the ramps, so the trapezoid's peak velocity is exactly the slider's
+  px/s on every hop; deriving it the other way round (duration = distance/speed, then wall-clock
+  ramp fractions) made short hops cruise 1.6x nominal and long ones 1.11x. Hops too long to fly
+  whole BOOST (`Traversal.boostIfDistant`) up the flight path and then fly the final
+  `CONFIG.cruiseWindowMs` window at the slider speed. `CONFIG.maxCruiseDurationMs` is now only a
+  runaway guard that warns; do not reintroduce a duration cap as a pacing knob — it silently
+  overrides the player's slider, which is exactly the bug this replaced.
+- **The speed setting is the flight's tempo, not just the cruise.** `Settings.tempo()` scales
+  every fixed cinematic hold through `beat()` (touchdown, departure, warp-in, launch countdown)
+  and the warp CSS through `--wn-tempo`. ~1.5s of fixed holds run per page; unscaled they swamp
+  the cruise on short hops and the slider reads as inert. Any new hold goes through `beat()`.
 - **CSS custom properties don't reach body-mounted layers.** During a journey `JourneyPortal`
   moves `#wikinaut-ship-shell` and `#wikinaut-jump-layer` onto `document.body`, outside
   `#wikinaut-root`. A `var()` consumed there with no declaration on the layer itself is

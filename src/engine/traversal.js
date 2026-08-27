@@ -30,7 +30,8 @@
           Storage.save({...state, currentIndex});
         }
 
-        renderRoute(state.route, currentIndex, currentIndex + 1);
+        renderRoute(state.route, currentIndex, currentIndex + 1, alternateRoutes(),
+          runtime.routeIndex);
 
         const isFinal = currentIndex >= state.route.length - 1;
         const nextTitle = isFinal ? null : state.route[currentIndex + 1];
@@ -178,7 +179,7 @@
         anchor = null;
       }
       if (!anchor) {
-        anchor = Transition.anchorFromLink(link, link.getBoundingClientRect());
+        anchor = Transition.anchorFromLink(link);
       }
 
       Storage.saveRoute(route, {
@@ -217,7 +218,8 @@
 
     // Document-space flight: the article is the world, the scroll is the camera. One cubic
     // bézier per hop, planned in document coordinates from the ship's current position to the
-    // link's center; the ship faces the curve's true tangent every frame while the camera
+    // link's ANCHOR FRAGMENT (anchorRect, never the union getBoundingClientRect — see
+    // util/geom.js); the ship faces the curve's true tangent every frame while the camera
     // scrolls to keep it riding the comfort line — the page streams underneath the ship.
     async cruiseToLink(link) {
       const speed = Settings.get('walkingPixelsPerSecond');
@@ -228,38 +230,51 @@
       // Comfort line: where the ship rides in the viewport — upper-middle (~40% down), kept
       // below the masthead and clear of the console band.
       const restLineY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      // Re-read per frame, not captured once: the cruise's own scrolling is precisely what
+      // triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows DURING
+      // the flight and a captured ceiling clamps the camera against a stale bottom.
+      const maxScrollNow = () =>
+        Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 
       // The ship's fixed-position transform is viewport-space; the flight is planned and flown
       // in document space and converted per frame (viewport = doc − scroll).
-      const start = {
+      const shipDoc = () => ({
         x: runtime.figurePosition.x + window.scrollX,
         y: runtime.figurePosition.y + window.scrollY,
-      };
-      const rect = link.getBoundingClientRect();
-      const end = {
-        x: rect.left + rect.width / 2 + window.scrollX - half,
-        y: rect.top + rect.height / 2 + window.scrollY - half,
+      });
+      const targetDoc = () => {
+        const rect = anchorRect(link);
+        return {
+          x: rect.left + rect.width / 2 + window.scrollX - half,
+          y: rect.top + rect.height / 2 + window.scrollY - half,
+        };
       };
 
       if (prefersReducedMotion()) {
-        window.scrollTo(0, clamp(end.y + half - restLineY, 0, maxScroll));
-        const t = Figure.targetAtLink(link);
-        Figure.headToward(start.x, start.y, end.x, end.y);
-        Figure.moveTo(t.x, t.y);
+        const end = targetDoc();
+        window.scrollTo(window.scrollX, clamp(end.y + half - restLineY, 0, maxScrollNow()));
+        const settled = Figure.targetAtRect(anchorRect(link));
+        Figure.headToward(runtime.figurePosition.x, runtime.figurePosition.y, settled.x, settled.y);
+        Figure.moveTo(settled.x, settled.y);
         Figure.pose('look');
         return;
       }
 
-      const {p0, p1, p2, p3} = buildFlightPath(start, end, runtime.figureAngle);
+      await Traversal.boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow);
+
+      const start = shipDoc();
+      const planned = targetDoc();
+      const {p0, p1, p2, p3} = buildFlightPath(start, planned, runtime.figureAngle);
       const lut = buildArcLengthLut(p0, p1, p2, p3);
-      const duration = clamp(
-        (lut.total / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxCruiseDurationMs);
-      // Wall-clock-derived velocity ramps: the take-off build-up (~0.9s) and touchdown ease
-      // (~0.7s) last the same real time on short and long hops alike, so a long flight never
-      // leaps to cruise speed in its first frames.
-      const rampUp = clamp(900 / duration, 0.1, 0.4);
-      const rampDown = clamp(700 / duration, 0.1, 0.35);
+      // Peak velocity is exactly `speed` px/s here, on every hop — planCruise derives the
+      // duration FROM the ramps so the trapezoid profile and the clock cannot disagree. The
+      // ramps themselves are wall-clock (a long flight never leaps to cruise in its first
+      // frames) and beat()-scaled, so the launch surge tracks the speed setting too.
+      const {duration, rampUp, rampDown} = planCruise(lut.total, speed, beat(900), beat(700));
+      if (duration >= CONFIG.maxCruiseDurationMs) {
+        console.warn('[Wikinaut] wn/cruise-runaway', {distance: lut.total, speed, duration});
+      }
+      const lockMs = beat(900);
       const startScroll = window.scrollY;
       const startAngle = runtime.figureAngle;
       // Comfort band the camera must keep the ship inside while it eases into lock — the ship
@@ -270,16 +285,42 @@
       const frameBottom = Math.min(window.innerHeight - 90, window.innerHeight * 0.82);
       const startCenterY = start.y + half - startScroll;
 
+      // Endpoint drift correction. Lazy images and MathML resolving mid-cruise move the target
+      // in document space, and the old code absorbed the whole error with a hard snap at
+      // touchdown. Instead: re-measure periodically, ease the measured delta in, and apply it
+      // weighted by curve progress so the TAIL of the path bends onto the new target while the
+      // ship's current position never jumps.
+      let drift = {x: 0, y: 0};      // eased, what's actually applied
+      let measured = {x: 0, y: 0};   // latest raw delta from the planned endpoint
+      let frame = 0;
+      let lastNow = performance.now();
+
       await animate(duration, (progress) => {
+        const now = performance.now();
+        const dt = Math.max(0, now - lastNow);
+        lastNow = now;
+
+        frame += 1;
+        if (frame % 6 === 0) {
+          const live = targetDoc();
+          measured = {x: live.x - planned.x, y: live.y - planned.y};
+        }
+        const ease = Math.min(1, dt / 250);
+        drift = {
+          x: drift.x + (measured.x - drift.x) * ease,
+          y: drift.y + (measured.y - drift.y) * ease,
+        };
+
         // Constant perceived speed: trapezoid distance profile → arc-length LUT → t.
         const t = lut.tForDistance(lut.total * trapezoidDistance(progress, rampUp, rampDown));
-        const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x);
-        const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y);
+        const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x) + drift.x * t;
+        const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y) + drift.y * t;
 
-        // Face the tangent; ease out any initial mismatch between the parked heading and the
-        // curve's first tangent over the accel ramp so the nose never snaps.
-        const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x);
-        const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y);
+        // Face the tangent (including the drift correction's own contribution); ease out any
+        // initial mismatch between the parked heading and the curve's first tangent over the
+        // accel ramp so the nose never snaps.
+        const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x) + drift.x;
+        const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y) + drift.y;
         let angle = runtime.figureAngle;
         if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
         if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
@@ -290,41 +331,96 @@
         // tracks exactly. The frame guard clamps the reel-in so the ship's center can never
         // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
         // near the edges the ship traverses the viewport instead.
+        const maxScroll = maxScrollNow();
         const follow = clamp(y + half - restLineY, 0, maxScroll);
-        const lockT = Math.min(1, (progress * duration) / 900);
+        const lockT = Math.min(1, (progress * duration) / lockMs);
         const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
         const guardTop = lerp(Math.min(startCenterY, frameTop), frameTop, lockT);
         let camera = lerp(startScroll, follow, lockT);
         camera = clamp(camera, y + half - guardBottom, y + half - guardTop);
         camera = clamp(camera, 0, maxScroll);
-        window.scrollTo(0, camera);
+        // Preserve horizontal scroll (scrollTo(0, …) yanked wide tables back to the left every
+        // frame), and place the ship from the ACHIEVED scroll, not the requested one: a skin's
+        // smooth-scroll, scroll anchoring or rubber-banding makes them differ, and the error
+        // then rode along for the rest of the flight.
+        window.scrollTo(window.scrollX, camera);
 
-        Figure.moveTo(x - window.scrollX, y - camera);
+        Figure.moveTo(x - window.scrollX, y - window.scrollY);
         Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
         JourneyPortal.ensureAbovePanel();
       });
 
-      // Land on the link's live rect — absorbs any layout shift during the flight.
-      const settled = Figure.targetAtLink(link);
-      Figure.moveTo(settled.x, settled.y);
+      // Land on the link's live anchor — absorbs whatever the drift correction didn't.
+      await Traversal.settleOnLink(link);
       Figure.pose('look');
     },
 
-    async walkToLink(link) {
-      // The cruise already set the ship down on the link; re-snap (in case the page
-      // shifted), settle, and charge the jump drive. The link may have been re-hidden DURING
-      // the cruise (MediaWiki collapses navboxes seconds after load) — reopen its container
-      // first so the touchdown lands on painted content, never on a phantom rect.
-      Links.ensureVisible(link);
-      const target = Figure.targetAtLink(link);
+    // Hops too long to fly whole. Compressing them into a fixed time ceiling was the old
+    // behaviour, and it silently overrode the speed setting: the cap bit at 6600px on the
+    // default 550 px/s (routine on a tall article) and at 1200px on the slowest setting, so
+    // long hops flew arbitrarily faster than short ones and the slider stopped mattering.
+    //
+    // Cap the flown DISTANCE instead. The ship boosts — a brief warp flourish, then it skips
+    // up the flight path — and flies the final window under its own power at exactly the
+    // slider speed. Every hop's visible approach is the same pace, whatever the distance.
+    async boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow) {
+      const half = CONFIG.figureSize / 2;
+      const windowPx =
+        Math.max((speed * CONFIG.cruiseWindowMs) / 1000, CONFIG.minCruiseWindowPx);
+      const start = {
+        x: runtime.figurePosition.x + window.scrollX,
+        y: runtime.figurePosition.y + window.scrollY,
+      };
+      const end = targetDoc();
+      const span = Math.hypot(end.x - start.x, end.y - start.y);
+      if (span <= windowPx) return;
+
+      const skip = 1 - windowPx / span;
+      const boostTo = {x: lerp(start.x, end.x, skip), y: lerp(start.y, end.y, skip)};
+
+      Figure.pose('boost');
+      Transition.renderBoost({
+        slitX: runtime.figurePosition.x + half,
+        slitY: runtime.figurePosition.y + half,
+      });
+      await sleep(beat(200));
+
+      window.scrollTo(window.scrollX, clamp(boostTo.y + half - restLineY, 0, maxScrollNow()));
+      Figure.headToward(boostTo.x, boostTo.y, end.x, end.y);
+      Figure.moveTo(boostTo.x - window.scrollX, boostTo.y - window.scrollY);
+      Trail.clearRibbon();   // don't streak the skipped span
+      Figure.pose('walking');
+      await sleep(beat(120));
+    },
+
+    // Set the ship down exactly on the link. Re-measures the anchor fragment and, if the page
+    // moved it out of the safe band (a navbox expanding at touchdown shifts the link and
+    // everything below it; a doc-edge-clamped camera can't reach targets at the very top or
+    // bottom of an article), eases the page back before landing. Returns the one rect every
+    // anchored layer — ship, reticle, burst, jump slit — then shares.
+    async settleOnLink(link) {
+      await Transition.scrollAnchorIntoBand(link);
+      const rect = anchorRect(link);
+      const target = Figure.targetAtRect(rect);
       Figure.moveTo(target.x, target.y);
-      Trail.clearRibbon();                                 // drop the cruise plume, keep embers
-      LinkFx.spawnReticle(link.getBoundingClientRect());   // scan→lock onto the target link
-      LinkFx.landingBurst(target.slitX, target.slitY);     // double shock-ring at touchdown
-      Trail.burst(target.slitX, target.slitY, 16);         // scattering touchdown embers
-      await sleep(140);
-      Figure.pose('grab');                                 // charge the jump drive
-      await sleep(220);
+      return {rect, target};
+    },
+
+    async walkToLink(link) {
+      // The cruise already set the ship down on the link; re-snap (in case the page shifted),
+      // settle, and charge the jump drive. The link may have been re-hidden DURING the cruise
+      // (MediaWiki collapses navboxes seconds after load) — reopen its container first so the
+      // touchdown lands on painted content, never on a phantom rect, and settleOnLink then
+      // corrects for the shift that reopening it just caused.
+      Links.ensureVisible(link);
+      const {rect, target} = await Traversal.settleOnLink(link);
+      Trail.clearRibbon();                         // drop the cruise plume, keep embers
+      LinkFx.spawnReticle(rect);                   // scan→lock onto the target link
+      LinkFx.landingBurst(target.slitX, target.slitY);   // double shock-ring at touchdown
+      Trail.burst(target.slitX, target.slitY, 16); // scattering touchdown embers
+      await sleep(beat(140));
+      Figure.pose('grab');                         // charge the jump drive
+      await sleep(beat(220));
     },
 
     // Fallback when the link can't be found in the live DOM: persist the advanced route
@@ -343,11 +439,11 @@
         const slitY = runtime.figurePosition.y + CONFIG.figureSize / 2;
         Transition.renderEmergencyWarp({slitX, slitY});
         Figure.pose('warp');
-        await sleep(260);
+        await sleep(beat(260));
         Figure.hide();
-        await sleep(60);
+        await sleep(beat(60));
       } else {
-        await sleep(prefersReducedMotion() ? 0 : 300);
+        await sleep(prefersReducedMotion() ? 0 : beat(300));
       }
 
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
@@ -366,7 +462,7 @@
 
     async arrive(route) {
       Storage.clear();
-      renderRoute(route, route.length - 1, -1);
+      renderRoute(route, route.length - 1, -1, alternateRoutes(), runtime.routeIndex);
       setStatus(`Arrived at ${route[route.length - 1]}. Course complete.`);
       Phase.set(PHASES.ARRIVED);
       // Victory flourish where the ship dropped out of warp, then it departs (fades out) —
@@ -379,7 +475,7 @@
       Trail.burst(vx, vy, 26);       // and a shower of sparks
       dom.beginButton.disabled = true;
       runtime.route = route;
-      await sleep(prefersReducedMotion() ? 600 : 1600);
+      await sleep(prefersReducedMotion() ? beat(600) : beat(1600));
       Figure.hide();
       Trail.clear();
       Phase.set(PHASES.IDLE);

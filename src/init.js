@@ -23,8 +23,10 @@
     const state = Storage.load();
     if (state?.route?.length) {
       runtime.route = state.route;
-      // Restore the full route set (pre-launch only) so the cycler survives a reload.
-      if (Array.isArray(state.routes) && state.routes.length > 1 && !state.active) {
+      // Restore the full route set on EVERY load, mid-flight included: the cycler needs it
+      // pre-launch, and the star chart's identity layout needs it throughout the journey (the
+      // pager itself stays gated to the course-ready phase, in cycleRoute and in CSS).
+      if (Array.isArray(state.routes) && state.routes.length > 1) {
         runtime.routes = state.routes;
         runtime.routeIndex = Number.isInteger(state.routeIndex) ? state.routeIndex : 0;
       }

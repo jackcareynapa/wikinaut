@@ -21,7 +21,8 @@
     Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
 
-    // Warm the alias cache for the first hop through the countdown, so the origin page's
+    // Warm the alias cache for the first hop through the countdown, so th
+    // e origin page's
     // own link scan never waits on the network even when the title needs a redirect alias.
     const firstHop = route[currentIndex + 1];
     if (firstHop) Routing.fetchRedirectAliases(firstHop).catch(() => {});

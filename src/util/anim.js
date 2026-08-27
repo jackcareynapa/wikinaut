@@ -23,6 +23,14 @@
     });
   }
 
+  // Wall-clock beat, scaled by the flight-speed setting. EVERY fixed cinematic hold in a flight
+  // goes through this, so the whole tempo follows the slider and not just the cruise: ~1.5s of
+  // fixed holds run per page (warp-in, touchdown, departure), which swamped the cruise on short
+  // hops and made the setting read as inert.
+  function beat(ms) {
+    return Math.round(ms * Settings.tempo());
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
@@ -156,6 +164,34 @@
         return ts[lo - 1] + (ts[lo] - ts[lo - 1]) * ((d - ds[lo - 1]) / seg);
       },
     };
+  }
+
+  // Plan one hop's velocity profile: the ramps trapezoidDistance() wants, plus the duration
+  // that makes them true. Peak velocity is EXACTLY `speed` px/s on any hop long enough to reach
+  // it, and the acceleration is identical on hops that aren't — so two hops at one slider
+  // setting cruise at the same speed, which is the entire point of the setting.
+  //
+  // Deriving the duration from the ramps (rather than the other way round) is what fixes it.
+  // The old code computed duration = distance/speed and then passed wall-clock ramp FRACTIONS,
+  // but trapezoidDistance normalizes distance over duration, so its peak is
+  // 1/(1-(rampUp+rampDown)/2) x nominal: 1.6x on a short hop, 1.11x on a long one. Hops at the
+  // same setting cruised up to 44% apart.
+  function planCruise(distance, speed, rampUpMs = 900, rampDownMs = 700) {
+    const v = Math.max(speed, 1) / 1000;                  // px per ms
+    const rampDist = (v * (rampUpMs + rampDownMs)) / 2;   // area under both ramp triangles
+    if (distance <= rampDist) {
+      // Too short to reach cruise: shrink both ramps by one factor so the ship still
+      // accelerates at the standard RATE and simply tops out lower (peak = s * speed).
+      const s = Math.sqrt(Math.max(distance, 0) / Math.max(rampDist, 1e-6));
+      const span = Math.max(rampUpMs * s + rampDownMs * s, 1);
+      return {
+        duration: Math.max(span, CONFIG.minCruiseDurationMs),
+        rampUp: (rampUpMs * s) / span,
+        rampDown: (rampDownMs * s) / span,
+      };
+    }
+    const duration = rampUpMs + rampDownMs + (distance - rampDist) / v;
+    return {duration, rampUp: rampUpMs / duration, rampDown: rampDownMs / duration};
   }
 
   // Trapezoid velocity profile: accel/decel ramps at each end, constant cruise between.
