@@ -4,14 +4,23 @@
   // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
   // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
   // await would strand forever and the engine's error handling (stall + retry) never engage.
+  //
+  // onFrame receives the FRAME TIMESTAMP as well as the progress, and anything a frame stamps
+  // must use it rather than calling performance.now() again. The trail used to stamp its
+  // points with a fresh performance.now() inside the callback and then age them against this
+  // rAF `now`, which is EARLIER — so the freshest point had a negative age every frame and the
+  // head of the plume was over-driven in proportion to how long the frame took to run.
+  // `start` is seeded from the first frame, not from call time, so a tween that begins on a
+  // busy frame doesn't silently skip its opening.
   function animate(duration, onFrame) {
     return new Promise((resolve, reject) => {
-      const start = performance.now();
+      let start = null;
       FxLoop.add(function tick(now) {
         let progress;
         try {
+          if (start === null) start = now;
           progress = clamp((now - start) / duration, 0, 1);
-          onFrame(progress);
+          onFrame(progress, now);
         } catch (error) {
           reject(error);
           return false;

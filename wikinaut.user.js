@@ -727,7 +727,10 @@
     #wikinaut-countdown[data-on="true"] { display: flex; }
 
     /* Sustained, escalating launch shake — amplitude ramps over the burn, then settles. */
-    #wikinaut-root[data-shake="true"] #wikinaut-panel { animation: wikinaut-shake 1400ms ease-in-out; }
+    /* Tempo-scaled so it covers the whole climb (beat(170) + beat(1000)) at any speed. */
+    #wikinaut-root[data-shake="true"] #wikinaut-panel {
+      animation: wikinaut-shake calc(1170ms * var(--wn-tempo, 1)) ease-in-out;
+    }
     @keyframes wikinaut-shake {
       0%   { transform: translate(-50%, 0); }
       8%   { transform: translate(calc(-50% - 1px), 0.5px); }
@@ -952,13 +955,24 @@
     }
     @keyframes wikinaut-warp-zoom { 0% { transform: translate(-50%,-50%) scale(0.6); } 100% { transform: translate(-50%,-50%) scale(1.5); } }
 
+    /* 56 of these play at once, so the streak animates a COMPOSITABLE property. Growing 'width'
+       (the old keyframe) is a layout property: 56 elements re-laid-out and repainted every
+       frame, on the main thread, at exactly the moment the arrival path is also running its
+       synchronous full-page link scan. Fixed width + scaleX is the identical picture without
+       the layout. The per-streak angle arrives as --wn-streak-angle (set by
+       Transition.renderHyperspace) so the keyframe can own the whole composed transform —
+       writing 'transform' on the element directly would be clobbered by the animation.
+       No will-change on these OR on the warp layers below: promoting them measurably HURT
+       (a repeatable ~60ms stall at the jump — 56 new layers, and the tunnel/flash are
+       tens-of-vmax mix-blend-mode elements whose textures are expensive to allocate). */
     .wikinaut-warp-streak {
       position: absolute;
       left: 0;
       top: 0;
       height: 2px;
-      width: 2px;
+      width: 150vmax;
       transform-origin: 0 50%;
+      transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002);
       border-radius: 2px;
       background: linear-gradient(90deg, #ffffff, var(--wn-accent-glow) 22%, var(--wn-accent) 44%, var(--wn-streak-a) 72%, transparent);
       box-shadow: 0 0 12px var(--wn-streak-b), 0 0 4px #ffffff;
@@ -968,9 +982,9 @@
       animation: wikinaut-streak calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-streak {
-      0%   { width: 4px; opacity: 0; }
+      0%   { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002); opacity: 0; }
       12%  { opacity: 1; }
-      100% { width: 150vmax; opacity: 0; }
+      100% { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(1); opacity: 0; }
     }
 
     .wikinaut-flash {
@@ -1277,7 +1291,20 @@
     autocompleteTimer: 0,
     autocompleteAbortId: 0,
     settingsOpen: false,
+    // Bumped every time a flight ends (resume()'s finally). Per-frame callbacks capture it and
+    // bail when it moves, so a tween that outlives its flight — an error path tore the flight
+    // down while a cruise was mid-air — stops scrolling the document and moving the ship.
+    flightGeneration: 0,
   };
+
+  // Thrown by a frame callback whose flight has already been torn down. animate() rejects with
+  // it; Traversal.resume swallows it, because it is a clean stop and not a fault to narrate.
+  class FlightAbandoned extends Error {
+    constructor() {
+      super('Flight abandoned.');
+      this.code = 'wn/flight-abandoned';
+    }
+  }
 
   // ─── Phase machine (drives both nav-computer UI and ship) ─────────────────────
   // Single source of truth for "where are we in the flight loop". `data-phase` on the panel is
@@ -1499,13 +1526,22 @@
   // animate()'s tweens) instead of each running its own competing loop. Subscribers are
   // called with the frame timestamp and unsubscribe by returning false; the chain parks
   // itself when the last subscriber leaves, so idle pages schedule zero frames.
+  //
+  // TWO PHASES, and the split is load-bearing. Subscribers used to share one insertion-ordered
+  // Set, which made their relative order depend on the route taken to get there: on a mid-route
+  // page the cruise tween was added first and ran first, but on the LAUNCH page Trail._draw was
+  // already resident from the liftoff climb, so the trail painted before the cruise had moved
+  // the ship or scrolled the page — a plume one frame behind the nozzle, drawn against the
+  // pre-scroll offset, shearing away from the ship whenever the camera moved fast. Movers run
+  // in 'update', painters in 'draw', and the order stops being an accident of history.
   const FxLoop = {
-    _subs: new Set(),
+    _update: new Set(),
+    _draw: new Set(),
     _rafId: null,
     _ticking: false,
 
-    add(fn) {
-      FxLoop._subs.add(fn);
+    add(fn, phase = 'update') {
+      (phase === 'draw' ? FxLoop._draw : FxLoop._update).add(fn);
       // No scheduling mid-tick: a subscriber added from inside a frame callback (the cruise
       // feeds Trail.addPoint every frame) is picked up by the end-of-tick reschedule —
       // scheduling here too would stack extra rAF chains, exactly what this loop exists to
@@ -1516,23 +1552,31 @@
     },
 
     remove(fn) {
-      FxLoop._subs.delete(fn);
+      FxLoop._update.delete(fn);
+      FxLoop._draw.delete(fn);
+    },
+
+    _runPhase(subs, now) {
+      for (const fn of [...subs]) {
+        try {
+          if (fn(now) === false) subs.delete(fn);
+        } catch (error) {
+          // A throwing subscriber is dropped rather than allowed to kill the shared loop.
+          subs.delete(fn);
+          console.warn('[Wikinaut] wn/fx-frame-failed', error);
+        }
+      }
     },
 
     _tick(now) {
       FxLoop._rafId = null;
       FxLoop._ticking = true;
-      for (const fn of [...FxLoop._subs]) {
-        try {
-          if (fn(now) === false) FxLoop._subs.delete(fn);
-        } catch (error) {
-          // A throwing subscriber is dropped rather than allowed to kill the shared loop.
-          FxLoop._subs.delete(fn);
-          console.warn('[Wikinaut] wn/fx-frame-failed', error);
-        }
-      }
+      FxLoop._runPhase(FxLoop._update, now);
+      FxLoop._runPhase(FxLoop._draw, now);
       FxLoop._ticking = false;
-      if (FxLoop._subs.size) FxLoop._rafId = requestAnimationFrame(FxLoop._tick);
+      if (FxLoop._update.size || FxLoop._draw.size) {
+        FxLoop._rafId = requestAnimationFrame(FxLoop._tick);
+      }
     },
   };
 
@@ -1576,12 +1620,31 @@
     // Points and sparks live in DOCUMENT coordinates (callers pass viewport positions; scroll
     // is added on write and subtracted at draw time). The wake is part of the article world:
     // when the camera scrolls, it streams past with the page instead of sticking to the glass.
-    addPoint(x, y) {
-      const now = performance.now();
-      if (now - Trail._lastPointTime < 16) return;
+    //
+    // `now` is the FRAME TIMESTAMP the caller was handed, never a fresh performance.now():
+    // _draw ages points against the rAF clock, and stamping them on the other one made the
+    // freshest point's age negative every frame (see animate()). It stays optional only for
+    // the handful of callers outside a frame.
+    addPoint(x, y, now = performance.now()) {
+      Trail.addPointDoc(
+        x + CONFIG.figureSize / 2 + window.scrollX,
+        y + CONFIG.figureSize / 2 + window.scrollY,
+        now);
+    },
+
+    // The same, for callers that already hold DOCUMENT coordinates — the cruise plans and flies
+    // in document space, so routing it through a viewport position and back cost two extra
+    // scroll reads per frame (each one a forced layout, right after the frame's scrollTo).
+    addPointDoc(cx, cy, now = performance.now()) {
+      // Sample by DISTANCE, not on a 16ms timer. The old time throttle dropped roughly every
+      // other point on a 120Hz display and emitted them unevenly under load; spacing the wake
+      // in pixels gives the ribbon the same density at any refresh rate or flight speed.
+      const last = Trail.points.length ? Trail.points[Trail.points.length - 1] : null;
+      if (last) {
+        const moved = Math.hypot(cx - last.x, cy - last.y);
+        if (moved < 2 && now - Trail._lastPointTime < 32) return;
+      }
       Trail._lastPointTime = now;
-      const cx = x + CONFIG.figureSize / 2 + window.scrollX;
-      const cy = y + CONFIG.figureSize / 2 + window.scrollY;
       Trail.points.push({x: cx, y: cy, t: now});
       // Occasional ember flung off the engine wash, drifting and decaying on its own.
       if (Math.random() < 0.5) {
@@ -1594,15 +1657,17 @@
           life: 360 + Math.random() * 360,
         });
       }
-      if (Trail.points.length > 140) Trail.points.shift();
-      if (Trail.sparks.length > 70) Trail.sparks.shift();
-      FxLoop.add(Trail._draw);
+      // Trim from the front by copying the tail once, not with a per-point O(n) shift() at
+      // ~60Hz. _draw's own compaction sweep keeps both arrays short in the steady state, so
+      // this is a rarely-hit ceiling rather than the normal path.
+      if (Trail.points.length > 180) Trail.points = Trail.points.slice(-140);
+      if (Trail.sparks.length > 90) Trail.sparks = Trail.sparks.slice(-70);
+      FxLoop.add(Trail._draw, 'draw');
     },
 
     // Radial shower of embers from a point (viewport coords in, doc coords stored) — used for
     // ignition and touchdown.
-    burst(x, y, count = 16) {
-      const now = performance.now();
+    burst(x, y, count = 16, now = performance.now()) {
       const docX = x + window.scrollX;
       const docY = y + window.scrollY;
       for (let i = 0; i < count; i += 1) {
@@ -1616,8 +1681,8 @@
           life: 360 + Math.random() * 460,
         });
       }
-      if (Trail.sparks.length > 90) Trail.sparks.splice(0, Trail.sparks.length - 90);
-      FxLoop.add(Trail._draw);
+      if (Trail.sparks.length > 90) Trail.sparks = Trail.sparks.slice(-90);
+      FxLoop.add(Trail._draw, 'draw');
     },
 
     // Rebuilds the wake color ramp (48 pre-mixed {r,g,b} buckets: white-hot core → ship
@@ -1661,8 +1726,10 @@
       Trail._flareSprite = sprite;
     },
 
-    // Runs on the shared FxLoop; returns false (unsubscribes) once the last point/spark has
-    // faded, after painting one final clear frame.
+    // Runs in the shared FxLoop's DRAW phase — after every mover has had its turn, so the
+    // wake is painted against the ship position and scroll offset of THIS frame, not the last
+    // one. Returns false (unsubscribes) once the last point/spark has faded, after painting
+    // one final clear frame.
     _draw(now) {
       const ctx = Trail.ctx;
       if (!ctx) return false;
@@ -2249,11 +2316,21 @@
 
       const {W, H} = StarMap;
       const routes = StarMap.orderedRoutes(route, alternates, lane);
-      const pos = StarMap.layout(routes);
+      let pos = StarMap.layout(routes);
       const usage = StarMap.nodeUsage(routes);
       const n = route.length;
 
-      const pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      // Every selected-route node must have resolved to a coordinate. It always does today
+      // (orderedRoutes puts the selected route in the set), but spreading an undefined here
+      // yields {} and the .toFixed() below would throw on a bare object — so fall back to a
+      // solo layout rather than taking the panel down with it. Alternates already guard.
+      let pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      if (pts.some((p) => typeof p.x !== 'number')) {
+        console.warn('[Wikinaut] wn/chart-layout-gap', {route});
+        pos = StarMap.layout([route]);
+        pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      }
+      const seed = StarMap._seed;
       const d = StarMap.pathData(pts);
 
       // One <g> per DISTINCT node, never one per route-and-node: a page on three routes is a
@@ -2280,7 +2357,7 @@
           let markup = `<g class="${cls.join(' ')}" style="--d:${delay}ms">`;
           if (selected) {
             const label = p.title.length > 16 ? `${p.title.slice(0, 15)}…` : p.title;
-            const ly = p.i % 2 === 0 ? p.y - 9 : p.y + 15;
+            const ly = StarMap.labelY(pts, selected.i, seed);
             markup +=
               `<circle class="wikinaut-wp-node" cx="${cx}" cy="${cy}" r="4.4"></circle>` +
               `<circle class="wikinaut-wp-core" cx="${cx}" cy="${cy}" r="1.8"></circle>` +
@@ -2294,7 +2371,7 @@
 
       host.innerHTML =
         `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
-        `${StarMap.graticule()}${StarMap.stars()}${StarMap.alternatesMarkup(alternates, pos)}` +
+        `${StarMap.graticule()}${StarMap.stars(seed)}${StarMap.alternatesMarkup(alternates, pos)}` +
         `<path id="wikinaut-route-track" d="${d}"></path>` +
         `<path id="wikinaut-route-path" d="${d}"></path>${nodes}</svg>`;
 
@@ -2346,18 +2423,33 @@
     //
     // All equally-short routes have the same length, so the hop index IS the column. Within a
     // column, collect the DISTINCT titles across every route (in lane order — deterministic and
-    // selection-independent) and give each one its own slot around the column's baseline. The
-    // baseline keeps the old hand-plotted sine wander so the plate still reads as a chart, but
-    // it is damped and clamped as a column gets busier so the fan always fits the margins.
+    // selection-independent) and give each one its own slot around the column's baseline.
+    //
+    // Every offset below is SEEDED off the route set rather than being a pure function of the
+    // column index, which is what stops the plate from looking machined: the old layout used one
+    // fixed sine, `sin(i * 0.9 + 0.6)`, so any two routes of the same length drew the identical
+    // chart. The seed comes from the memo key, which is built from orderedRoutes and is therefore
+    // selection-independent and stable across reloads — paging ◀/▶ or advancing a hop re-inks the
+    // same stars, it never re-scatters them.
     layout(routes) {
       const key = routes.map((r) => r.join('\u0001')).join('\u0002');
       if (StarMap._layoutKey === key && StarMap._layout) return StarMap._layout;
 
-      const {W, H} = StarMap;
+      const {W, H, PAD_X, PAD_V} = StarMap;
+      const seed = hashString(key);
       const cols = Math.max(...routes.map((r) => r.length));
-      const innerW = W - StarMap.PAD_X * 2;
-      const amp = (H - StarMap.PAD_V * 2) / 2;
+      const innerW = W - PAD_X * 2;
+      const amp = (H - PAD_V * 2) / 2;
       const midY = H / 2;
+      const step = cols <= 1 ? 0 : innerW / (cols - 1);
+
+      // This chart's own wander curve: two harmonics, seeded phase/frequency/mix. One sine
+      // reads as a machined wave; two out-of-phase ones read as a hand-plotted course.
+      const phase = seededUnit(seed, 'phase') * Math.PI * 2;
+      const phase2 = seededUnit(seed, 'phase2') * Math.PI * 2;
+      const freq = 0.55 + seededUnit(seed, 'freq') * 0.75;
+      const freq2 = freq * (1.7 + seededUnit(seed, 'freq2') * 1.1);
+      const blend = 0.22 + seededUnit(seed, 'blend') * 0.2;
 
       const columns = Array.from({length: cols}, () => []);
       for (const route of routes) {
@@ -2369,31 +2461,85 @@
 
       const map = new Map();
       columns.forEach((titles, i) => {
-        const x = cols === 1 ? W / 2 : StarMap.PAD_X + innerW * (i / (cols - 1));
+        // Endpoints stay pinned to the margins — source and destination are the two fixed
+        // points of the plate. Interior columns breathe by up to 22% of the gap, which is
+        // under half of it, so columns can never cross or reorder.
+        const endpoint = i === 0 || i === cols - 1;
+        const nudge = endpoint ? 0 : seededSigned(seed, `x${i}`) * step * 0.22;
+        const colX = cols === 1 ? W / 2 : PAD_X + step * i + nudge;
         const spread = titles.length - 1;
-        const spacing = spread ? Math.min(26, (H - StarMap.PAD_V * 2) / spread) : 0;
-        const halfSpan = (spread * spacing) / 2;
-        const lo = StarMap.PAD_V + halfSpan;
-        const hi = H - StarMap.PAD_V - halfSpan;
-        const wander = midY + Math.sin(i * 0.9 + 0.6) * amp * (1 - spread / (busiest + 1));
-        const baseline = lo <= hi ? clamp(wander, lo, hi) : midY;
-        titles.forEach((title, k) => {
-          map.set(StarMap.nodeKey(i, title), {
-            i,
-            title,
-            x,
-            y: baseline + (k - spread / 2) * spacing,
-          });
-        });
+        const spacing = spread ? Math.min(26, (H - PAD_V * 2) / spread) : 0;
+        // Busier columns damp toward the centreline so the fan still fits the margins.
+        const damp = 1 - spread / (busiest + 1);
+        const baseline = midY + amp * damp *
+          ((1 - blend) * Math.sin(i * freq + phase) + blend * Math.sin(i * freq2 + phase2));
+
+        // Per-node jitter is keyed on (column, TITLE) and never on route or lane order, so a
+        // page shared by several routes still resolves to exactly one coordinate — the
+        // converge-and-fan reading of the DAG depends on it.
+        const entries = titles.map((title, k) => ({
+          i,
+          title,
+          x: colX + (endpoint ? 0 : seededSigned(seed, `nx${i}`, title) * 5),
+          y: baseline + (k - spread / 2) * spacing +
+            seededSigned(seed, `y${i}`, title) * (spacing || 9) * 0.28,
+        }));
+
+        StarMap.relaxColumn(entries);
+        for (const entry of entries) map.set(StarMap.nodeKey(i, entry.title), entry);
       });
 
       StarMap._layoutKey = key;
       StarMap._layout = map;
+      StarMap._seed = seed;
       return map;
+    },
+
+    // Jitter can bring two stars in a column close enough to read as one blob, so pull the
+    // column back apart: sort by y, enforce a minimum gap, then slide the whole column back
+    // inside the vertical margins. Mutates `entries` in place.
+    MIN_NODE_GAP: 11,
+
+    relaxColumn(entries) {
+      const {H, PAD_V, MIN_NODE_GAP} = StarMap;
+      const top = PAD_V;
+      const bottom = H - PAD_V;
+      entries.sort((a, b) => a.y - b.y);
+      for (let k = 1; k < entries.length; k += 1) {
+        const gap = entries[k].y - entries[k - 1].y;
+        if (gap < MIN_NODE_GAP) entries[k].y = entries[k - 1].y + MIN_NODE_GAP;
+      }
+      const overflow = entries[entries.length - 1].y - bottom;
+      if (overflow > 0) for (const entry of entries) entry.y -= overflow;
+      for (const entry of entries) entry.y = clamp(entry.y, top, bottom);
     },
 
     _layoutKey: '',
     _layout: null,
+    _seed: 0,
+
+    // Which side of a star its name sits on. The old rule was a strict odd/even zig-zag on the
+    // hop index, which is half of why the plate read as machined — and it ignored where the
+    // course line actually runs, so a label could land straight on top of it. Put the name on
+    // the side the line ISN'T, break a near-tie with the chart's seed, and force it inward at
+    // the margins so a name can never fall off the plate.
+    LABEL_TOP: 10,        // baselines: the glyphs' ascender still has to fit above this
+    LABEL_BOTTOM: 171,
+
+    labelY(pts, idx, seed) {
+      const p = pts[idx];
+      const prev = pts[idx - 1] || p;
+      const next = pts[idx + 1] || p;
+      const neighbourY = (prev.y + next.y) / 2;
+      let above = neighbourY >= p.y;
+      if (Math.abs(neighbourY - p.y) < 2) above = seededUnit(seed, 'label', p.title) < 0.5;
+      // Flip only when the preferred side would actually run the name off the plate — the
+      // test is on the LABEL's own extent, not on the node's margin, or a node merely near
+      // the top of the band loses its natural side while 25px of clear space sits above it.
+      if (above && p.y - 9 < StarMap.LABEL_TOP) above = false;
+      if (!above && p.y + 15 > StarMap.LABEL_BOTTOM) above = true;
+      return clamp(above ? p.y - 9 : p.y + 15, StarMap.LABEL_TOP, StarMap.LABEL_BOTTOM);
+    },
 
     pathData(pts) {
       return pts
@@ -2419,14 +2565,14 @@
         `${ticks}</g>`;
     },
 
-    // Deterministic scatter of fixed stars (hash noise, stable across renders).
-    stars() {
+    // Scatter of fixed stars — seeded off the chart so two courses don't share a sky, and
+    // deterministic so the field never crawls between re-inks.
+    stars(seed) {
       const {W, H} = StarMap;
-      const frac = (v) => v - Math.floor(v);
       let stars = '';
       for (let i = 0; i < 28; i += 1) {
-        const sx = frac(Math.sin(i * 12.9898) * 43758.5453) * W;
-        const sy = frac(Math.cos(i * 4.1414) * 24634.633) * H;
+        const sx = seededUnit(seed, 'sx', i) * W;
+        const sy = seededUnit(seed, 'sy', i) * H;
         const r = i % 6 === 0 ? 1.1 : 0.6;
         stars += `<circle class="wikinaut-chart-star" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${r}" opacity="${(0.25 + (i % 4) * 0.16).toFixed(2)}"></circle>`;
       }
@@ -2819,6 +2965,7 @@
       dom.figure.dataset.journeyPortal = 'true';
       dom.ripLayer.dataset.journeyPortal = 'true';
       JourneyPortal.active = true;
+      JourneyPortal.ensureAbovePanel();
     },
 
     deactivate() {
@@ -2827,9 +2974,14 @@
       dom.root.insertBefore(dom.figure, dom.panel);
       delete dom.figure.dataset.journeyPortal;
       delete dom.ripLayer.dataset.journeyPortal;
+      // The inline z-index has to go with them: it used to survive every flight, leaving the
+      // (invisible) ship shell pinned above all page chrome for the rest of the page's life.
+      dom.figure.style.removeProperty('z-index');
       JourneyPortal.active = false;
     },
 
+    // Set once, on activate. This ran every frame of every cruise, writing an unchanging value
+    // and invalidating the ship's style for nothing.
     ensureAbovePanel() {
       if (!JourneyPortal.active) return;
       dom.figure.style.zIndex = String(CONFIG.journeyPortalZ);
@@ -2948,6 +3100,14 @@
         `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) rotate(${runtime.figureAngle.toFixed(1)}deg)`;
     },
 
+    // Heading AND position in one write — for the per-frame callers. setAngle() re-writes the
+    // transform on its own, so a loop that called setAngle() and then moveTo() (the cruise did)
+    // paid two style writes and two style invalidations per frame for one visible change.
+    place(x, y, angle) {
+      runtime.figureAngle = angle;
+      Figure.moveTo(x, y);
+    },
+
     // Where the ship sets down for a given target rect, and the single point every anchored
     // FX layer (reticle, landing burst, jump slit) must share with it.
     //
@@ -3046,9 +3206,12 @@
 
       if (!reduce) {
         dom.root.dataset.shake = 'true';
+        // Matches the climb it covers — beat(170) + beat(1000) — and the CSS duration is
+        // tempo-scaled to the same figure. A fixed 1400ms stopped shaking a third of the way
+        // up at the slowest speed setting.
         window.setTimeout(() => {
           if (dom.root) delete dom.root.dataset.shake;
-        }, 1400);
+        }, beat(1170));
       }
 
       // Hold a beat while thrust builds (flame + smoke ignite, embers fly), then climb
@@ -3059,11 +3222,10 @@
         Figure.moveTo(start.x, riseY);
       } else {
         await sleep(beat(170));
-        await animate(beat(1000), (progress) => {
+        await animate(beat(1000), (progress, now) => {
           const eased = easeInCubic(progress);
           Figure.moveTo(start.x, lerp(start.y, riseY, eased));
-          Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
-          JourneyPortal.ensureAbovePanel();
+          Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y, now);
         });
       }
 
@@ -3233,6 +3395,8 @@
 
         await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
+        // A superseded flight is a clean stop, not a fault — don't narrate it at the player.
+        if (error instanceof FlightAbandoned) return;
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
@@ -3243,6 +3407,9 @@
         dom.beginButton.disabled = false;
         Figure.hide();
       } finally {
+        // Retire this flight's generation FIRST: any frame callback still in flight sees the
+        // change on its next tick and stops driving the page.
+        runtime.flightGeneration += 1;
         LinkFx.clearReticle();
         JourneyPortal.deactivate();
         if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
@@ -3290,7 +3457,12 @@
     async _jumpThrough(link, nextTitle, currentIndex, route) {
       let anchor;
       try {
-        const watchdogMs = CONFIG.jumpDurationMs + 600;
+        // beat()-scaled, because everything it races is: tearThrough runs
+        // beat(220)+beat(140)+beat(320)+beat(60) = 740 x tempo, and tempo reaches 1.8 at the
+        // slowest speed setting. A fixed 1300ms guard lost that race (1332ms) and clicked
+        // through while the ship was still mid-warp-stretch — the jump cutting its own
+        // animation off. This stays a real watchdog; it just always sits BEYOND the FX.
+        const watchdogMs = beat(CONFIG.jumpDurationMs + 600);
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -3312,6 +3484,10 @@
           angle: runtime.figureAngle,
         },
       });
+      // Retire the flight generation before navigating: if the watchdog above won the race,
+      // tearThrough's own scroll tween may still be live, and it must not keep scrolling the
+      // document out from under the navigation.
+      runtime.flightGeneration += 1;
       link.click();
     },
 
@@ -3351,9 +3527,15 @@
       // Comfort line: where the ship rides in the viewport — upper-middle (~40% down), kept
       // below the masthead and clear of the console band.
       const restLineY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
-      // Re-read per frame, not captured once: the cruise's own scrolling is precisely what
-      // triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows DURING
-      // the flight and a captured ceiling clamps the camera against a stale bottom.
+      // Re-read as the flight runs, not captured once: the cruise's own scrolling is precisely
+      // what triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows
+      // DURING the flight and a captured ceiling clamps the camera against a stale bottom.
+      //
+      // But reading scrollHeight forces a synchronous layout, and doing it inside the frame
+      // callback — right after that frame's scrollTo — did it ~60 times a second on a document
+      // the size of a long Wikipedia article. Lazy content resolves over hundreds of
+      // milliseconds, not between frames, so the loop below refreshes this on a slow cadence
+      // and reads the cached value otherwise.
       const maxScrollNow = () =>
         Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 
@@ -3414,18 +3596,28 @@
       let drift = {x: 0, y: 0};      // eased, what's actually applied
       let measured = {x: 0, y: 0};   // latest raw delta from the planned endpoint
       let frame = 0;
-      let lastNow = performance.now();
+      let lastNow = null;
+      let maxScroll = maxScrollNow();
+      const generation = runtime.flightGeneration;
 
-      await animate(duration, (progress) => {
-        const now = performance.now();
-        const dt = Math.max(0, now - lastNow);
+      await animate(duration, (progress, now) => {
+        // A flight that has already been torn down (an error path ran resume()'s finally while
+        // this tween was live) must stop DRIVING THE PAGE. Nothing used to check: the tween
+        // kept scrolling the document and moving a hidden ship to completion, long after the
+        // console had gone to STALLED.
+        if (runtime.flightGeneration !== generation) throw new FlightAbandoned();
+
+        const dt = lastNow === null ? 0 : Math.max(0, now - lastNow);
         lastNow = now;
 
         frame += 1;
+        // The two forced-layout reads of the loop, deliberately on different frames so no
+        // single frame pays for both.
         if (frame % 6 === 0) {
           const live = targetDoc();
           measured = {x: live.x - planned.x, y: live.y - planned.y};
         }
+        if (frame % 10 === 3) maxScroll = maxScrollNow();
         const ease = Math.min(1, dt / 250);
         drift = {
           x: drift.x + (measured.x - drift.x) * ease,
@@ -3445,14 +3637,12 @@
         let angle = runtime.figureAngle;
         if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
         if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
-        Figure.setAngle(angle);
 
         // Camera: scroll so the ship rides the comfort line. Eases into lock over the first
         // ~0.9s of real time (no jump at launch, and no seconds-long lag on slow hops), then
         // tracks exactly. The frame guard clamps the reel-in so the ship's center can never
         // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
         // near the edges the ship traverses the viewport instead.
-        const maxScroll = maxScrollNow();
         const follow = clamp(y + half - restLineY, 0, maxScroll);
         const lockT = Math.min(1, (progress * duration) / lockMs);
         const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
@@ -3466,9 +3656,15 @@
         // then rode along for the rest of the flight.
         window.scrollTo(window.scrollX, camera);
 
-        Figure.moveTo(x - window.scrollX, y - window.scrollY);
-        Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
-        JourneyPortal.ensureAbovePanel();
+        // ONE scroll read per frame, after the frame's only scroll write, shared by everything
+        // downstream. Each of these reads forces a layout flush; the loop used to take three
+        // (ship placement, then Trail's own, then Trail._draw's) interleaved with style writes.
+        const scrollX = window.scrollX;
+        const scrollY = window.scrollY;
+        // Heading and position in a single transform write (setAngle would have made it two).
+        Figure.place(x - scrollX, y - scrollY, angle);
+        // Document coords straight through — the cruise already has them.
+        Trail.addPointDoc(x + half, y + half, now);
       });
 
       // Land on the link's live anchor — absorbs whatever the drift correction didn't.
@@ -3638,8 +3834,17 @@
       // article can carry ~2000 internal links and a per-link getComputedStyle scan is slow.
       const entries = [];
       for (const link of root.querySelectorAll(SELECTORS.articleLink)) {
-        if (!Links.isArticleLinkHref(link)) continue;
-        if (!Links.matchesTitle(link, title, aliases)) continue;
+        // Parse the href ONCE and thread it through. This runs on every anchor of the page —
+        // ~2000 on a Parsoid article — and it used to parse each one twice (here, then again
+        // inside matchesTitle via Titles.fromLink), which is a couple of thousand redundant
+        // new URL() constructions on the main thread, landing right on top of the arrival
+        // animation the scan is deliberately overlapped with.
+        const raw = Links.articleTitleFromHref(link);
+        if (!raw) continue;
+        if (!Links.matchesTitle(link, title, aliases, raw)) continue;
+        // Cheapest-first ordering: the ancestor walk only runs on anchors that already matched
+        // the target title, not on every link in the document.
+        if (link.closest('.mw-editsection, .reference')) continue;
         // The ANCHOR fragment, not the union rect (see anchorRect): on a wrapped link the
         // union spans both lines and the whole column, which skewed every scorer below.
         const rect = anchorRect(link);
@@ -3653,8 +3858,10 @@
     // and bottom navboxes — so match against the href title, the link's `title` attribute
     // (catches odd encodings the href parse would miss), and any known redirect aliases of
     // `title` (catches a live page linking via a redirect the graph already resolved through).
-    matchesTitle(link, title, aliases = []) {
-      const linkTitle = Titles.fromLink(link);
+    matchesTitle(link, title, aliases = [], raw = null) {
+      const linkTitle = raw === null
+        ? Titles.fromLink(link)
+        : safeDecode(raw).replace(/_/g, ' ');
       if (Titles.same(linkTitle, title)) return true;
       const titleAttr = link.getAttribute('title');
       if (titleAttr && Titles.same(titleAttr, title)) return true;
@@ -3702,13 +3909,19 @@
     // visible" report. (Candidates are title-matched against a known ns-0 route title anyway,
     // so this filter is only an early-out; it must never over-reject.)
     isArticleLinkHref(link) {
-      const title = Titles.rawFromHref(link.getAttribute('href') || '');
-      if (!title || Links.NAMESPACE_PREFIX_RE.test(title)) return false;
+      if (!Links.articleTitleFromHref(link)) return false;
       // Only skip edit-section links and citation-reference superscripts ([1] → #cite_note).
       // Navboxes, sidebars, infoboxes, AND the references list itself are all counted by the
       // graph, so they must stay searchable.
-      if (link.closest('.mw-editsection, .reference')) return false;
-      return true;
+      return !link.closest('.mw-editsection, .reference');
+    },
+
+    // The href half of the test, returning the RAW (url-form) title so the caller can reuse it
+    // instead of parsing the same href a second time. '' when this isn't a same-wiki ns-0
+    // article link.
+    articleTitleFromHref(link) {
+      const title = Titles.rawFromHref(link.getAttribute('href') || '');
+      return !title || Links.NAMESPACE_PREFIX_RE.test(title) ? '' : title;
     },
 
     // Known MediaWiki namespaces (href form: underscores, possibly "_talk" variants).
@@ -3981,13 +4194,19 @@
             ? 2 * progress * progress
             : 1 - ((1 - progress) * (1 - progress) * 2);
           window.scrollTo(window.scrollX, startScroll + delta * eased);
-          const settled = Figure.targetAtRect(anchorRect(link));
+          // ONE measurement per frame, shared by the ship and the reticle. The reticle used
+          // to be repositioned only after the loop, so for the whole correction it hung at a
+          // stale viewport spot while the link slid out from under it, then snapped.
+          const rect = anchorRect(link);
+          const settled = Figure.targetAtRect(rect);
           Figure.moveTo(settled.x, settled.y);
+          LinkFx.repositionReticle(rect);
         });
       }
-      const settled = Figure.targetAtRect(anchorRect(link));
+      const rect = anchorRect(link);
+      const settled = Figure.targetAtRect(rect);
       Figure.moveTo(settled.x, settled.y);
-      LinkFx.repositionReticle(anchorRect(link));
+      LinkFx.repositionReticle(rect);
     },
 
     // Drop the ship out of warp at the saved entry point on a freshly loaded page, so the
@@ -4011,8 +4230,12 @@
       Transition.renderHyperspace(anchor, 'arrive');
       Figure.show();
       Figure.pose('warp-in');
+      // The ship drops out of warp first (its own stretch is calc(300ms * tempo)), but the
+      // field must play its FULL calc(jumpDurationMs * tempo) — clearing the layer at 0.7 of
+      // that killed every arrival animation 30% in and the whole field popped out.
       await sleep(beat(CONFIG.jumpDurationMs * 0.7));
       Figure.pose('look');
+      await sleep(beat(CONFIG.jumpDurationMs * 0.3));
       dom.ripLayer.dataset.open = 'false';
       dom.ripLayer.replaceChildren();
     },
@@ -4047,7 +4270,9 @@
         const streak = document.createElement('div');
         streak.className = 'wikinaut-warp-streak';
         const angle = (360 / streakCount) * i + (Math.random() * 8 - 4);
-        streak.style.transform = `rotate(${angle}deg)`;
+        // The angle is a custom property, not a `transform` write: the streak keyframe
+        // animates transform (scaleX — see styles.js) and would clobber an inline one.
+        streak.style.setProperty('--wn-streak-angle', `${angle.toFixed(2)}deg`);
         streak.style.animationDelay = `${Math.random() * 70}ms`;
         warp.append(streak);
       }
@@ -4065,12 +4290,6 @@
       core.dataset.mode = mode;
 
       dom.ripLayer.append(tunnel, warp, ring, flash, core);
-
-      // A brief camera shudder as the drive punches through (departure only).
-      if (mode === 'depart' && dom.root && !prefersReducedMotion()) {
-        dom.root.dataset.warpShake = 'true';
-        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 240);
-      }
     },
 
     // The boost flourish: the ship's own drive punching up the flight path on a hop too long
@@ -4096,7 +4315,7 @@
           dom.ripLayer.dataset.open = 'false';
           dom.ripLayer.replaceChildren();
         }
-      }, CONFIG.jumpDurationMs);
+      }, beat(CONFIG.jumpDurationMs * 0.6));   // matches the boost ring/core CSS duration
     },
 
     // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by
@@ -4274,14 +4493,23 @@
   // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
   // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
   // await would strand forever and the engine's error handling (stall + retry) never engage.
+  //
+  // onFrame receives the FRAME TIMESTAMP as well as the progress, and anything a frame stamps
+  // must use it rather than calling performance.now() again. The trail used to stamp its
+  // points with a fresh performance.now() inside the callback and then age them against this
+  // rAF `now`, which is EARLIER — so the freshest point had a negative age every frame and the
+  // head of the plume was over-driven in proportion to how long the frame took to run.
+  // `start` is seeded from the first frame, not from call time, so a tween that begins on a
+  // busy frame doesn't silently skip its opening.
   function animate(duration, onFrame) {
     return new Promise((resolve, reject) => {
-      const start = performance.now();
+      let start = null;
       FxLoop.add(function tick(now) {
         let progress;
         try {
+          if (start === null) start = now;
           progress = clamp((now - start) / duration, 0, 1);
-          onFrame(progress);
+          onFrame(progress, now);
         } catch (error) {
           reject(error);
           return false;
@@ -4578,6 +4806,43 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // ─── Deterministic noise ─────────────────────────────────────────────────────
+  // Seeds for anything that must LOOK scattered but be byte-identical on every render: the
+  // star chart's node placement and its fixed-star field. A chart is re-inked whenever the
+  // pager moves, the ship advances a hop, or the page reloads mid-flight — so "scattered"
+  // here can never mean Math.random(), or the stars would crawl.
+
+  // FNV-1a, 32-bit.
+  function hashString(value) {
+    const text = String(value);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i += 1) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    return h >>> 0;
+  }
+
+  // Deterministic [0,1) from a seed plus any number of salts — a channel name, a column
+  // index, a page title. Salting (rather than advancing a stateful PRNG) is what keeps a
+  // node's offset a pure function of (chart, column, title): the same page shared by three
+  // routes resolves to ONE coordinate regardless of the order the routes are walked in.
+  function seededUnit(seed, ...salts) {
+    let h = seed >>> 0;
+    for (const salt of salts) {
+      h = (h ^ hashString(salt)) >>> 0;
+      h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+      h = Math.imul(h ^ (h >>> 12), 0x297a2d39) >>> 0;
+    }
+    h = (h ^ (h >>> 16)) >>> 0;
+    return h / 4294967296;
+  }
+
+  // The same, mapped to [-1,1) — the usual form for an offset.
+  function seededSigned(seed, ...salts) {
+    return seededUnit(seed, ...salts) * 2 - 1;
   }
 
   // ─── Init ────────────────────────────────────────────────────────────────────

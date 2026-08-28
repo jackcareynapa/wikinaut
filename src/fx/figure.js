@@ -91,6 +91,14 @@
         `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) rotate(${runtime.figureAngle.toFixed(1)}deg)`;
     },
 
+    // Heading AND position in one write — for the per-frame callers. setAngle() re-writes the
+    // transform on its own, so a loop that called setAngle() and then moveTo() (the cruise did)
+    // paid two style writes and two style invalidations per frame for one visible change.
+    place(x, y, angle) {
+      runtime.figureAngle = angle;
+      Figure.moveTo(x, y);
+    },
+
     // Where the ship sets down for a given target rect, and the single point every anchored
     // FX layer (reticle, landing burst, jump slit) must share with it.
     //

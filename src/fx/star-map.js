@@ -25,11 +25,21 @@
 
       const {W, H} = StarMap;
       const routes = StarMap.orderedRoutes(route, alternates, lane);
-      const pos = StarMap.layout(routes);
+      let pos = StarMap.layout(routes);
       const usage = StarMap.nodeUsage(routes);
       const n = route.length;
 
-      const pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      // Every selected-route node must have resolved to a coordinate. It always does today
+      // (orderedRoutes puts the selected route in the set), but spreading an undefined here
+      // yields {} and the .toFixed() below would throw on a bare object — so fall back to a
+      // solo layout rather than taking the panel down with it. Alternates already guard.
+      let pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      if (pts.some((p) => typeof p.x !== 'number')) {
+        console.warn('[Wikinaut] wn/chart-layout-gap', {route});
+        pos = StarMap.layout([route]);
+        pts = route.map((title, i) => ({i, title, ...pos.get(StarMap.nodeKey(i, title))}));
+      }
+      const seed = StarMap._seed;
       const d = StarMap.pathData(pts);
 
       // One <g> per DISTINCT node, never one per route-and-node: a page on three routes is a
@@ -56,7 +66,7 @@
           let markup = `<g class="${cls.join(' ')}" style="--d:${delay}ms">`;
           if (selected) {
             const label = p.title.length > 16 ? `${p.title.slice(0, 15)}…` : p.title;
-            const ly = p.i % 2 === 0 ? p.y - 9 : p.y + 15;
+            const ly = StarMap.labelY(pts, selected.i, seed);
             markup +=
               `<circle class="wikinaut-wp-node" cx="${cx}" cy="${cy}" r="4.4"></circle>` +
               `<circle class="wikinaut-wp-core" cx="${cx}" cy="${cy}" r="1.8"></circle>` +
@@ -70,7 +80,7 @@
 
       host.innerHTML =
         `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
-        `${StarMap.graticule()}${StarMap.stars()}${StarMap.alternatesMarkup(alternates, pos)}` +
+        `${StarMap.graticule()}${StarMap.stars(seed)}${StarMap.alternatesMarkup(alternates, pos)}` +
         `<path id="wikinaut-route-track" d="${d}"></path>` +
         `<path id="wikinaut-route-path" d="${d}"></path>${nodes}</svg>`;
 
@@ -122,18 +132,33 @@
     //
     // All equally-short routes have the same length, so the hop index IS the column. Within a
     // column, collect the DISTINCT titles across every route (in lane order — deterministic and
-    // selection-independent) and give each one its own slot around the column's baseline. The
-    // baseline keeps the old hand-plotted sine wander so the plate still reads as a chart, but
-    // it is damped and clamped as a column gets busier so the fan always fits the margins.
+    // selection-independent) and give each one its own slot around the column's baseline.
+    //
+    // Every offset below is SEEDED off the route set rather than being a pure function of the
+    // column index, which is what stops the plate from looking machined: the old layout used one
+    // fixed sine, `sin(i * 0.9 + 0.6)`, so any two routes of the same length drew the identical
+    // chart. The seed comes from the memo key, which is built from orderedRoutes and is therefore
+    // selection-independent and stable across reloads — paging ◀/▶ or advancing a hop re-inks the
+    // same stars, it never re-scatters them.
     layout(routes) {
       const key = routes.map((r) => r.join('\u0001')).join('\u0002');
       if (StarMap._layoutKey === key && StarMap._layout) return StarMap._layout;
 
-      const {W, H} = StarMap;
+      const {W, H, PAD_X, PAD_V} = StarMap;
+      const seed = hashString(key);
       const cols = Math.max(...routes.map((r) => r.length));
-      const innerW = W - StarMap.PAD_X * 2;
-      const amp = (H - StarMap.PAD_V * 2) / 2;
+      const innerW = W - PAD_X * 2;
+      const amp = (H - PAD_V * 2) / 2;
       const midY = H / 2;
+      const step = cols <= 1 ? 0 : innerW / (cols - 1);
+
+      // This chart's own wander curve: two harmonics, seeded phase/frequency/mix. One sine
+      // reads as a machined wave; two out-of-phase ones read as a hand-plotted course.
+      const phase = seededUnit(seed, 'phase') * Math.PI * 2;
+      const phase2 = seededUnit(seed, 'phase2') * Math.PI * 2;
+      const freq = 0.55 + seededUnit(seed, 'freq') * 0.75;
+      const freq2 = freq * (1.7 + seededUnit(seed, 'freq2') * 1.1);
+      const blend = 0.22 + seededUnit(seed, 'blend') * 0.2;
 
       const columns = Array.from({length: cols}, () => []);
       for (const route of routes) {
@@ -145,31 +170,85 @@
 
       const map = new Map();
       columns.forEach((titles, i) => {
-        const x = cols === 1 ? W / 2 : StarMap.PAD_X + innerW * (i / (cols - 1));
+        // Endpoints stay pinned to the margins — source and destination are the two fixed
+        // points of the plate. Interior columns breathe by up to 22% of the gap, which is
+        // under half of it, so columns can never cross or reorder.
+        const endpoint = i === 0 || i === cols - 1;
+        const nudge = endpoint ? 0 : seededSigned(seed, `x${i}`) * step * 0.22;
+        const colX = cols === 1 ? W / 2 : PAD_X + step * i + nudge;
         const spread = titles.length - 1;
-        const spacing = spread ? Math.min(26, (H - StarMap.PAD_V * 2) / spread) : 0;
-        const halfSpan = (spread * spacing) / 2;
-        const lo = StarMap.PAD_V + halfSpan;
-        const hi = H - StarMap.PAD_V - halfSpan;
-        const wander = midY + Math.sin(i * 0.9 + 0.6) * amp * (1 - spread / (busiest + 1));
-        const baseline = lo <= hi ? clamp(wander, lo, hi) : midY;
-        titles.forEach((title, k) => {
-          map.set(StarMap.nodeKey(i, title), {
-            i,
-            title,
-            x,
-            y: baseline + (k - spread / 2) * spacing,
-          });
-        });
+        const spacing = spread ? Math.min(26, (H - PAD_V * 2) / spread) : 0;
+        // Busier columns damp toward the centreline so the fan still fits the margins.
+        const damp = 1 - spread / (busiest + 1);
+        const baseline = midY + amp * damp *
+          ((1 - blend) * Math.sin(i * freq + phase) + blend * Math.sin(i * freq2 + phase2));
+
+        // Per-node jitter is keyed on (column, TITLE) and never on route or lane order, so a
+        // page shared by several routes still resolves to exactly one coordinate — the
+        // converge-and-fan reading of the DAG depends on it.
+        const entries = titles.map((title, k) => ({
+          i,
+          title,
+          x: colX + (endpoint ? 0 : seededSigned(seed, `nx${i}`, title) * 5),
+          y: baseline + (k - spread / 2) * spacing +
+            seededSigned(seed, `y${i}`, title) * (spacing || 9) * 0.28,
+        }));
+
+        StarMap.relaxColumn(entries);
+        for (const entry of entries) map.set(StarMap.nodeKey(i, entry.title), entry);
       });
 
       StarMap._layoutKey = key;
       StarMap._layout = map;
+      StarMap._seed = seed;
       return map;
+    },
+
+    // Jitter can bring two stars in a column close enough to read as one blob, so pull the
+    // column back apart: sort by y, enforce a minimum gap, then slide the whole column back
+    // inside the vertical margins. Mutates `entries` in place.
+    MIN_NODE_GAP: 11,
+
+    relaxColumn(entries) {
+      const {H, PAD_V, MIN_NODE_GAP} = StarMap;
+      const top = PAD_V;
+      const bottom = H - PAD_V;
+      entries.sort((a, b) => a.y - b.y);
+      for (let k = 1; k < entries.length; k += 1) {
+        const gap = entries[k].y - entries[k - 1].y;
+        if (gap < MIN_NODE_GAP) entries[k].y = entries[k - 1].y + MIN_NODE_GAP;
+      }
+      const overflow = entries[entries.length - 1].y - bottom;
+      if (overflow > 0) for (const entry of entries) entry.y -= overflow;
+      for (const entry of entries) entry.y = clamp(entry.y, top, bottom);
     },
 
     _layoutKey: '',
     _layout: null,
+    _seed: 0,
+
+    // Which side of a star its name sits on. The old rule was a strict odd/even zig-zag on the
+    // hop index, which is half of why the plate read as machined — and it ignored where the
+    // course line actually runs, so a label could land straight on top of it. Put the name on
+    // the side the line ISN'T, break a near-tie with the chart's seed, and force it inward at
+    // the margins so a name can never fall off the plate.
+    LABEL_TOP: 10,        // baselines: the glyphs' ascender still has to fit above this
+    LABEL_BOTTOM: 171,
+
+    labelY(pts, idx, seed) {
+      const p = pts[idx];
+      const prev = pts[idx - 1] || p;
+      const next = pts[idx + 1] || p;
+      const neighbourY = (prev.y + next.y) / 2;
+      let above = neighbourY >= p.y;
+      if (Math.abs(neighbourY - p.y) < 2) above = seededUnit(seed, 'label', p.title) < 0.5;
+      // Flip only when the preferred side would actually run the name off the plate — the
+      // test is on the LABEL's own extent, not on the node's margin, or a node merely near
+      // the top of the band loses its natural side while 25px of clear space sits above it.
+      if (above && p.y - 9 < StarMap.LABEL_TOP) above = false;
+      if (!above && p.y + 15 > StarMap.LABEL_BOTTOM) above = true;
+      return clamp(above ? p.y - 9 : p.y + 15, StarMap.LABEL_TOP, StarMap.LABEL_BOTTOM);
+    },
 
     pathData(pts) {
       return pts
@@ -195,14 +274,14 @@
         `${ticks}</g>`;
     },
 
-    // Deterministic scatter of fixed stars (hash noise, stable across renders).
-    stars() {
+    // Scatter of fixed stars — seeded off the chart so two courses don't share a sky, and
+    // deterministic so the field never crawls between re-inks.
+    stars(seed) {
       const {W, H} = StarMap;
-      const frac = (v) => v - Math.floor(v);
       let stars = '';
       for (let i = 0; i < 28; i += 1) {
-        const sx = frac(Math.sin(i * 12.9898) * 43758.5453) * W;
-        const sy = frac(Math.cos(i * 4.1414) * 24634.633) * H;
+        const sx = seededUnit(seed, 'sx', i) * W;
+        const sy = seededUnit(seed, 'sy', i) * H;
         const r = i % 6 === 0 ? 1.1 : 0.6;
         stars += `<circle class="wikinaut-chart-star" cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${r}" opacity="${(0.25 + (i % 4) * 0.16).toFixed(2)}"></circle>`;
       }

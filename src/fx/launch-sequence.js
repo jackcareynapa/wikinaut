@@ -75,9 +75,12 @@
 
       if (!reduce) {
         dom.root.dataset.shake = 'true';
+        // Matches the climb it covers — beat(170) + beat(1000) — and the CSS duration is
+        // tempo-scaled to the same figure. A fixed 1400ms stopped shaking a third of the way
+        // up at the slowest speed setting.
         window.setTimeout(() => {
           if (dom.root) delete dom.root.dataset.shake;
-        }, 1400);
+        }, beat(1170));
       }
 
       // Hold a beat while thrust builds (flame + smoke ignite, embers fly), then climb
@@ -88,11 +91,10 @@
         Figure.moveTo(start.x, riseY);
       } else {
         await sleep(beat(170));
-        await animate(beat(1000), (progress) => {
+        await animate(beat(1000), (progress, now) => {
           const eased = easeInCubic(progress);
           Figure.moveTo(start.x, lerp(start.y, riseY, eased));
-          Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
-          JourneyPortal.ensureAbovePanel();
+          Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y, now);
         });
       }
 

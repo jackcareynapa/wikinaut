@@ -78,13 +78,19 @@
             ? 2 * progress * progress
             : 1 - ((1 - progress) * (1 - progress) * 2);
           window.scrollTo(window.scrollX, startScroll + delta * eased);
-          const settled = Figure.targetAtRect(anchorRect(link));
+          // ONE measurement per frame, shared by the ship and the reticle. The reticle used
+          // to be repositioned only after the loop, so for the whole correction it hung at a
+          // stale viewport spot while the link slid out from under it, then snapped.
+          const rect = anchorRect(link);
+          const settled = Figure.targetAtRect(rect);
           Figure.moveTo(settled.x, settled.y);
+          LinkFx.repositionReticle(rect);
         });
       }
-      const settled = Figure.targetAtRect(anchorRect(link));
+      const rect = anchorRect(link);
+      const settled = Figure.targetAtRect(rect);
       Figure.moveTo(settled.x, settled.y);
-      LinkFx.repositionReticle(anchorRect(link));
+      LinkFx.repositionReticle(rect);
     },
 
     // Drop the ship out of warp at the saved entry point on a freshly loaded page, so the
@@ -108,8 +114,12 @@
       Transition.renderHyperspace(anchor, 'arrive');
       Figure.show();
       Figure.pose('warp-in');
+      // The ship drops out of warp first (its own stretch is calc(300ms * tempo)), but the
+      // field must play its FULL calc(jumpDurationMs * tempo) — clearing the layer at 0.7 of
+      // that killed every arrival animation 30% in and the whole field popped out.
       await sleep(beat(CONFIG.jumpDurationMs * 0.7));
       Figure.pose('look');
+      await sleep(beat(CONFIG.jumpDurationMs * 0.3));
       dom.ripLayer.dataset.open = 'false';
       dom.ripLayer.replaceChildren();
     },
@@ -144,7 +154,9 @@
         const streak = document.createElement('div');
         streak.className = 'wikinaut-warp-streak';
         const angle = (360 / streakCount) * i + (Math.random() * 8 - 4);
-        streak.style.transform = `rotate(${angle}deg)`;
+        // The angle is a custom property, not a `transform` write: the streak keyframe
+        // animates transform (scaleX — see styles.js) and would clobber an inline one.
+        streak.style.setProperty('--wn-streak-angle', `${angle.toFixed(2)}deg`);
         streak.style.animationDelay = `${Math.random() * 70}ms`;
         warp.append(streak);
       }
@@ -162,12 +174,6 @@
       core.dataset.mode = mode;
 
       dom.ripLayer.append(tunnel, warp, ring, flash, core);
-
-      // A brief camera shudder as the drive punches through (departure only).
-      if (mode === 'depart' && dom.root && !prefersReducedMotion()) {
-        dom.root.dataset.warpShake = 'true';
-        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 240);
-      }
     },
 
     // The boost flourish: the ship's own drive punching up the flight path on a hop too long
@@ -193,7 +199,7 @@
           dom.ripLayer.dataset.open = 'false';
           dom.ripLayer.replaceChildren();
         }
-      }, CONFIG.jumpDurationMs);
+      }, beat(CONFIG.jumpDurationMs * 0.6));   // matches the boost ring/core CSS duration
     },
 
     // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by

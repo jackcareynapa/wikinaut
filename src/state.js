@@ -13,7 +13,20 @@
     autocompleteTimer: 0,
     autocompleteAbortId: 0,
     settingsOpen: false,
+    // Bumped every time a flight ends (resume()'s finally). Per-frame callbacks capture it and
+    // bail when it moves, so a tween that outlives its flight — an error path tore the flight
+    // down while a cruise was mid-air — stops scrolling the document and moving the ship.
+    flightGeneration: 0,
   };
+
+  // Thrown by a frame callback whose flight has already been torn down. animate() rejects with
+  // it; Traversal.resume swallows it, because it is a clean stop and not a fault to narrate.
+  class FlightAbandoned extends Error {
+    constructor() {
+      super('Flight abandoned.');
+      this.code = 'wn/flight-abandoned';
+    }
+  }
 
   // ─── Phase machine (drives both nav-computer UI and ship) ─────────────────────
   // Single source of truth for "where are we in the flight loop". `data-phase` on the panel is

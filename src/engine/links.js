@@ -33,8 +33,17 @@
       // article can carry ~2000 internal links and a per-link getComputedStyle scan is slow.
       const entries = [];
       for (const link of root.querySelectorAll(SELECTORS.articleLink)) {
-        if (!Links.isArticleLinkHref(link)) continue;
-        if (!Links.matchesTitle(link, title, aliases)) continue;
+        // Parse the href ONCE and thread it through. This runs on every anchor of the page —
+        // ~2000 on a Parsoid article — and it used to parse each one twice (here, then again
+        // inside matchesTitle via Titles.fromLink), which is a couple of thousand redundant
+        // new URL() constructions on the main thread, landing right on top of the arrival
+        // animation the scan is deliberately overlapped with.
+        const raw = Links.articleTitleFromHref(link);
+        if (!raw) continue;
+        if (!Links.matchesTitle(link, title, aliases, raw)) continue;
+        // Cheapest-first ordering: the ancestor walk only runs on anchors that already matched
+        // the target title, not on every link in the document.
+        if (link.closest('.mw-editsection, .reference')) continue;
         // The ANCHOR fragment, not the union rect (see anchorRect): on a wrapped link the
         // union spans both lines and the whole column, which skewed every scorer below.
         const rect = anchorRect(link);
@@ -48,8 +57,10 @@
     // and bottom navboxes — so match against the href title, the link's `title` attribute
     // (catches odd encodings the href parse would miss), and any known redirect aliases of
     // `title` (catches a live page linking via a redirect the graph already resolved through).
-    matchesTitle(link, title, aliases = []) {
-      const linkTitle = Titles.fromLink(link);
+    matchesTitle(link, title, aliases = [], raw = null) {
+      const linkTitle = raw === null
+        ? Titles.fromLink(link)
+        : safeDecode(raw).replace(/_/g, ' ');
       if (Titles.same(linkTitle, title)) return true;
       const titleAttr = link.getAttribute('title');
       if (titleAttr && Titles.same(titleAttr, title)) return true;
@@ -97,13 +108,19 @@
     // visible" report. (Candidates are title-matched against a known ns-0 route title anyway,
     // so this filter is only an early-out; it must never over-reject.)
     isArticleLinkHref(link) {
-      const title = Titles.rawFromHref(link.getAttribute('href') || '');
-      if (!title || Links.NAMESPACE_PREFIX_RE.test(title)) return false;
+      if (!Links.articleTitleFromHref(link)) return false;
       // Only skip edit-section links and citation-reference superscripts ([1] → #cite_note).
       // Navboxes, sidebars, infoboxes, AND the references list itself are all counted by the
       // graph, so they must stay searchable.
-      if (link.closest('.mw-editsection, .reference')) return false;
-      return true;
+      return !link.closest('.mw-editsection, .reference');
+    },
+
+    // The href half of the test, returning the RAW (url-form) title so the caller can reuse it
+    // instead of parsing the same href a second time. '' when this isn't a same-wiki ns-0
+    // article link.
+    articleTitleFromHref(link) {
+      const title = Titles.rawFromHref(link.getAttribute('href') || '');
+      return !title || Links.NAMESPACE_PREFIX_RE.test(title) ? '' : title;
     },
 
     // Known MediaWiki namespaces (href form: underscores, possibly "_talk" variants).

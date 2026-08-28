@@ -112,6 +112,8 @@
 
         await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
+        // A superseded flight is a clean stop, not a fault — don't narrate it at the player.
+        if (error instanceof FlightAbandoned) return;
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
@@ -122,6 +124,9 @@
         dom.beginButton.disabled = false;
         Figure.hide();
       } finally {
+        // Retire this flight's generation FIRST: any frame callback still in flight sees the
+        // change on its next tick and stops driving the page.
+        runtime.flightGeneration += 1;
         LinkFx.clearReticle();
         JourneyPortal.deactivate();
         if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
@@ -169,7 +174,12 @@
     async _jumpThrough(link, nextTitle, currentIndex, route) {
       let anchor;
       try {
-        const watchdogMs = CONFIG.jumpDurationMs + 600;
+        // beat()-scaled, because everything it races is: tearThrough runs
+        // beat(220)+beat(140)+beat(320)+beat(60) = 740 x tempo, and tempo reaches 1.8 at the
+        // slowest speed setting. A fixed 1300ms guard lost that race (1332ms) and clicked
+        // through while the ship was still mid-warp-stretch — the jump cutting its own
+        // animation off. This stays a real watchdog; it just always sits BEYOND the FX.
+        const watchdogMs = beat(CONFIG.jumpDurationMs + 600);
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -191,6 +201,10 @@
           angle: runtime.figureAngle,
         },
       });
+      // Retire the flight generation before navigating: if the watchdog above won the race,
+      // tearThrough's own scroll tween may still be live, and it must not keep scrolling the
+      // document out from under the navigation.
+      runtime.flightGeneration += 1;
       link.click();
     },
 
@@ -230,9 +244,15 @@
       // Comfort line: where the ship rides in the viewport — upper-middle (~40% down), kept
       // below the masthead and clear of the console band.
       const restLineY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
-      // Re-read per frame, not captured once: the cruise's own scrolling is precisely what
-      // triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows DURING
-      // the flight and a captured ceiling clamps the camera against a stale bottom.
+      // Re-read as the flight runs, not captured once: the cruise's own scrolling is precisely
+      // what triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows
+      // DURING the flight and a captured ceiling clamps the camera against a stale bottom.
+      //
+      // But reading scrollHeight forces a synchronous layout, and doing it inside the frame
+      // callback — right after that frame's scrollTo — did it ~60 times a second on a document
+      // the size of a long Wikipedia article. Lazy content resolves over hundreds of
+      // milliseconds, not between frames, so the loop below refreshes this on a slow cadence
+      // and reads the cached value otherwise.
       const maxScrollNow = () =>
         Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 
@@ -293,18 +313,28 @@
       let drift = {x: 0, y: 0};      // eased, what's actually applied
       let measured = {x: 0, y: 0};   // latest raw delta from the planned endpoint
       let frame = 0;
-      let lastNow = performance.now();
+      let lastNow = null;
+      let maxScroll = maxScrollNow();
+      const generation = runtime.flightGeneration;
 
-      await animate(duration, (progress) => {
-        const now = performance.now();
-        const dt = Math.max(0, now - lastNow);
+      await animate(duration, (progress, now) => {
+        // A flight that has already been torn down (an error path ran resume()'s finally while
+        // this tween was live) must stop DRIVING THE PAGE. Nothing used to check: the tween
+        // kept scrolling the document and moving a hidden ship to completion, long after the
+        // console had gone to STALLED.
+        if (runtime.flightGeneration !== generation) throw new FlightAbandoned();
+
+        const dt = lastNow === null ? 0 : Math.max(0, now - lastNow);
         lastNow = now;
 
         frame += 1;
+        // The two forced-layout reads of the loop, deliberately on different frames so no
+        // single frame pays for both.
         if (frame % 6 === 0) {
           const live = targetDoc();
           measured = {x: live.x - planned.x, y: live.y - planned.y};
         }
+        if (frame % 10 === 3) maxScroll = maxScrollNow();
         const ease = Math.min(1, dt / 250);
         drift = {
           x: drift.x + (measured.x - drift.x) * ease,
@@ -324,14 +354,12 @@
         let angle = runtime.figureAngle;
         if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
         if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
-        Figure.setAngle(angle);
 
         // Camera: scroll so the ship rides the comfort line. Eases into lock over the first
         // ~0.9s of real time (no jump at launch, and no seconds-long lag on slow hops), then
         // tracks exactly. The frame guard clamps the reel-in so the ship's center can never
         // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
         // near the edges the ship traverses the viewport instead.
-        const maxScroll = maxScrollNow();
         const follow = clamp(y + half - restLineY, 0, maxScroll);
         const lockT = Math.min(1, (progress * duration) / lockMs);
         const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
@@ -345,9 +373,15 @@
         // then rode along for the rest of the flight.
         window.scrollTo(window.scrollX, camera);
 
-        Figure.moveTo(x - window.scrollX, y - window.scrollY);
-        Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
-        JourneyPortal.ensureAbovePanel();
+        // ONE scroll read per frame, after the frame's only scroll write, shared by everything
+        // downstream. Each of these reads forces a layout flush; the loop used to take three
+        // (ship placement, then Trail's own, then Trail._draw's) interleaved with style writes.
+        const scrollX = window.scrollX;
+        const scrollY = window.scrollY;
+        // Heading and position in a single transform write (setAngle would have made it two).
+        Figure.place(x - scrollX, y - scrollY, angle);
+        // Document coords straight through — the cruise already has them.
+        Trail.addPointDoc(x + half, y + half, now);
       });
 
       // Land on the link's live anchor — absorbs whatever the drift correction didn't.

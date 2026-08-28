@@ -38,12 +38,31 @@
     // Points and sparks live in DOCUMENT coordinates (callers pass viewport positions; scroll
     // is added on write and subtracted at draw time). The wake is part of the article world:
     // when the camera scrolls, it streams past with the page instead of sticking to the glass.
-    addPoint(x, y) {
-      const now = performance.now();
-      if (now - Trail._lastPointTime < 16) return;
+    //
+    // `now` is the FRAME TIMESTAMP the caller was handed, never a fresh performance.now():
+    // _draw ages points against the rAF clock, and stamping them on the other one made the
+    // freshest point's age negative every frame (see animate()). It stays optional only for
+    // the handful of callers outside a frame.
+    addPoint(x, y, now = performance.now()) {
+      Trail.addPointDoc(
+        x + CONFIG.figureSize / 2 + window.scrollX,
+        y + CONFIG.figureSize / 2 + window.scrollY,
+        now);
+    },
+
+    // The same, for callers that already hold DOCUMENT coordinates — the cruise plans and flies
+    // in document space, so routing it through a viewport position and back cost two extra
+    // scroll reads per frame (each one a forced layout, right after the frame's scrollTo).
+    addPointDoc(cx, cy, now = performance.now()) {
+      // Sample by DISTANCE, not on a 16ms timer. The old time throttle dropped roughly every
+      // other point on a 120Hz display and emitted them unevenly under load; spacing the wake
+      // in pixels gives the ribbon the same density at any refresh rate or flight speed.
+      const last = Trail.points.length ? Trail.points[Trail.points.length - 1] : null;
+      if (last) {
+        const moved = Math.hypot(cx - last.x, cy - last.y);
+        if (moved < 2 && now - Trail._lastPointTime < 32) return;
+      }
       Trail._lastPointTime = now;
-      const cx = x + CONFIG.figureSize / 2 + window.scrollX;
-      const cy = y + CONFIG.figureSize / 2 + window.scrollY;
       Trail.points.push({x: cx, y: cy, t: now});
       // Occasional ember flung off the engine wash, drifting and decaying on its own.
       if (Math.random() < 0.5) {
@@ -56,15 +75,17 @@
           life: 360 + Math.random() * 360,
         });
       }
-      if (Trail.points.length > 140) Trail.points.shift();
-      if (Trail.sparks.length > 70) Trail.sparks.shift();
-      FxLoop.add(Trail._draw);
+      // Trim from the front by copying the tail once, not with a per-point O(n) shift() at
+      // ~60Hz. _draw's own compaction sweep keeps both arrays short in the steady state, so
+      // this is a rarely-hit ceiling rather than the normal path.
+      if (Trail.points.length > 180) Trail.points = Trail.points.slice(-140);
+      if (Trail.sparks.length > 90) Trail.sparks = Trail.sparks.slice(-70);
+      FxLoop.add(Trail._draw, 'draw');
     },
 
     // Radial shower of embers from a point (viewport coords in, doc coords stored) — used for
     // ignition and touchdown.
-    burst(x, y, count = 16) {
-      const now = performance.now();
+    burst(x, y, count = 16, now = performance.now()) {
       const docX = x + window.scrollX;
       const docY = y + window.scrollY;
       for (let i = 0; i < count; i += 1) {
@@ -78,8 +99,8 @@
           life: 360 + Math.random() * 460,
         });
       }
-      if (Trail.sparks.length > 90) Trail.sparks.splice(0, Trail.sparks.length - 90);
-      FxLoop.add(Trail._draw);
+      if (Trail.sparks.length > 90) Trail.sparks = Trail.sparks.slice(-90);
+      FxLoop.add(Trail._draw, 'draw');
     },
 
     // Rebuilds the wake color ramp (48 pre-mixed {r,g,b} buckets: white-hot core → ship
@@ -123,8 +144,10 @@
       Trail._flareSprite = sprite;
     },
 
-    // Runs on the shared FxLoop; returns false (unsubscribes) once the last point/spark has
-    // faded, after painting one final clear frame.
+    // Runs in the shared FxLoop's DRAW phase — after every mover has had its turn, so the
+    // wake is painted against the ship position and scroll offset of THIS frame, not the last
+    // one. Returns false (unsubscribes) once the last point/spark has faded, after painting
+    // one final clear frame.
     _draw(now) {
       const ctx = Trail.ctx;
       if (!ctx) return false;

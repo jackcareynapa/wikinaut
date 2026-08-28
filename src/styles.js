@@ -559,7 +559,10 @@
     #wikinaut-countdown[data-on="true"] { display: flex; }
 
     /* Sustained, escalating launch shake — amplitude ramps over the burn, then settles. */
-    #wikinaut-root[data-shake="true"] #wikinaut-panel { animation: wikinaut-shake 1400ms ease-in-out; }
+    /* Tempo-scaled so it covers the whole climb (beat(170) + beat(1000)) at any speed. */
+    #wikinaut-root[data-shake="true"] #wikinaut-panel {
+      animation: wikinaut-shake calc(1170ms * var(--wn-tempo, 1)) ease-in-out;
+    }
     @keyframes wikinaut-shake {
       0%   { transform: translate(-50%, 0); }
       8%   { transform: translate(calc(-50% - 1px), 0.5px); }
@@ -784,13 +787,24 @@
     }
     @keyframes wikinaut-warp-zoom { 0% { transform: translate(-50%,-50%) scale(0.6); } 100% { transform: translate(-50%,-50%) scale(1.5); } }
 
+    /* 56 of these play at once, so the streak animates a COMPOSITABLE property. Growing 'width'
+       (the old keyframe) is a layout property: 56 elements re-laid-out and repainted every
+       frame, on the main thread, at exactly the moment the arrival path is also running its
+       synchronous full-page link scan. Fixed width + scaleX is the identical picture without
+       the layout. The per-streak angle arrives as --wn-streak-angle (set by
+       Transition.renderHyperspace) so the keyframe can own the whole composed transform —
+       writing 'transform' on the element directly would be clobbered by the animation.
+       No will-change on these OR on the warp layers below: promoting them measurably HURT
+       (a repeatable ~60ms stall at the jump — 56 new layers, and the tunnel/flash are
+       tens-of-vmax mix-blend-mode elements whose textures are expensive to allocate). */
     .wikinaut-warp-streak {
       position: absolute;
       left: 0;
       top: 0;
       height: 2px;
-      width: 2px;
+      width: 150vmax;
       transform-origin: 0 50%;
+      transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002);
       border-radius: 2px;
       background: linear-gradient(90deg, #ffffff, var(--wn-accent-glow) 22%, var(--wn-accent) 44%, var(--wn-streak-a) 72%, transparent);
       box-shadow: 0 0 12px var(--wn-streak-b), 0 0 4px #ffffff;
@@ -800,9 +814,9 @@
       animation: wikinaut-streak calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-streak {
-      0%   { width: 4px; opacity: 0; }
+      0%   { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002); opacity: 0; }
       12%  { opacity: 1; }
-      100% { width: 150vmax; opacity: 0; }
+      100% { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(1); opacity: 0; }
     }
 
     .wikinaut-flash {
