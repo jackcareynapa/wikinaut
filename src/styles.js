@@ -773,6 +773,9 @@
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame { opacity: 1; transform: scaleX(1.55); }
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 80ms steps(2) infinite; }
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-mid { opacity: 0.95; }
+    /* Boost burn: the long torch in the ship's own color for as long as the burn lasts. */
+    #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-flame { opacity: 1; transform: scaleX(1.55); }
+    #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 80ms steps(2) infinite; }
     @keyframes wikinaut-flame-flicker2 {
       0%   { transform: scaleX(0.9) scaleY(1.06); opacity: 0.82; }
       100% { transform: scaleX(1.1) scaleY(0.94); opacity: 1; }
@@ -973,8 +976,8 @@
       100% { transform: scaleX(0.04) scaleY(0.32); opacity: 0; }
     }
 
-    /* Boost burn: the ship stretches along its heading and snaps BACK. It is skipping up the
-       flight path, not leaving the page, so it must not reuse [data-pose="warp"] — that one
+    /* Boost ignition: the ship stretches along its heading and snaps BACK. It is burning up
+       the flight path, not leaving the page, so it must not reuse [data-pose="warp"] — that one
        ends the keyframe at opacity 0 and holds there (animation-fill-mode: forwards),
        which made the ship vanish for the rest of the hop. */
     #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-body {
