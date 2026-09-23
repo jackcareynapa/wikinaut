@@ -207,6 +207,57 @@
     return {duration, rampUp: rampUpMs / duration, rampDown: rampDownMs / duration};
   }
 
+  // Plan a whole hop as a time → distance-along-the-curve mapping, so the cruise asks one
+  // question per frame ("how far along am I at this many ms?") whether or not it boosts.
+  //
+  // Hops up to the flight window (speed x CONFIG.cruiseWindowMs, with the trigger margin) fly
+  // planCruise's trapezoid: peak velocity exactly the slider. Longer hops BURN: the ship lights
+  // its drive and covers everything but the final window on the SAME curve, accelerating from
+  // rest and decelerating smoothly back to the slider speed at the handoff, then flies the
+  // window at the slider speed and lands on the usual ramp. The burn is a cubic Hermite in
+  // time (zero velocity at ignition, exactly slider velocity at the handoff), so position and
+  // velocity are both continuous: the ship never skips. It used to — the old boost scrolled the
+  // page and moved the ship tens of thousands of pixels in one frame, which read as the ship
+  // teleporting. boostMs is capped, so the longest hop still costs a bounded amount of time.
+  function planHop(distance, speed, rampUpMs = 900, rampDownMs = 700) {
+    const v = Math.max(speed, 1) / 1000;   // px per ms
+    const windowPx = Math.max(v * CONFIG.cruiseWindowMs, CONFIG.minCruiseWindowPx);
+    if (distance <= windowPx * CONFIG.boostTriggerFactor) {
+      const {duration, rampUp, rampDown} = planCruise(distance, speed, rampUpMs, rampDownMs);
+      return {
+        duration,
+        boostMs: 0,
+        turnMs: rampUp * duration,
+        distanceAt: (ms) => distance * trapezoidDistance(ms / duration, rampUp, rampDown),
+      };
+    }
+
+    const burn = distance - windowPx;
+    // Average burn speed at least boostSpeedFactor x the slider, within the time bounds — and
+    // never so long that the Hermite would have to back up to meet the handoff velocity
+    // (monotonic only while burn >= v * boostMs / 3).
+    const boostMs = Math.min(
+      clamp(burn / (v * CONFIG.boostSpeedFactor), CONFIG.boostMinMs, CONFIG.boostMaxMs),
+      (3 * burn) / v);
+    const flatMs = Math.max(0, windowPx / v - rampDownMs / 2);
+    const handoff = v * boostMs;   // the Hermite's end tangent, in τ units
+    return {
+      duration: boostMs + flatMs + rampDownMs,
+      boostMs,
+      turnMs: boostMs * 0.35,
+      distanceAt(ms) {
+        if (ms <= boostMs) {
+          const t = clamp(ms / boostMs, 0, 1);
+          return burn * (3 * t * t - 2 * t * t * t) + handoff * (t * t * t - t * t);
+        }
+        const cruiseMs = ms - boostMs;
+        if (cruiseMs <= flatMs) return burn + v * cruiseMs;
+        const q = Math.min(cruiseMs - flatMs, rampDownMs);
+        return Math.min(distance, burn + v * flatMs + v * q - (v * q * q) / (2 * rampDownMs));
+      },
+    };
+  }
+
   // Trapezoid velocity profile: accel/decel ramps at each end, constant cruise between.
   // Maps normalized time → normalized distance, so speed reads as constant without a harsh
   // full-speed landing. Ramps may be asymmetric (a longer, more visible take-off build-up

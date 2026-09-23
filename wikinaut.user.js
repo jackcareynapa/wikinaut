@@ -60,8 +60,9 @@
     minCruiseDurationMs: 180,   // degenerate-hop floor only (target already under the ship)
     // The flight window: how long the ship may cruise under its own power before the hop is
     // too long to fly whole. Beyond `speed x cruiseWindowMs` (with the margin below) the ship
-    // BOOSTS — it lights its drive and skips up the flight path — and then flies the final
-    // window at exactly the slider speed. Capping the flown DISTANCE this way keeps every
+    // BOOSTS — it lights its drive and burns up the flight path, continuously, at many times
+    // the slider speed (see planHop) — and then flies the final window at exactly the
+    // slider speed. Capping the flown DISTANCE this way keeps every
     // hop's visible approach at the same pace; the old fixed 12s duration cap did the
     // opposite, silently compressing long hops and overriding the slider (it bit at 6600px
     // on the default setting, which is routine on a tall article).
@@ -73,11 +74,17 @@
     // The trigger and the window used to be the SAME number, so a hop one pixel over the
     // window played the entire boost flourish in order to skip one pixel — and on a tall
     // article that is most hops, which is why the burn read as a hyperspace jump firing
-    // seconds after Launch. A FACTOR rather than an absolute margin, so the longest
+    // seconds after Launch. (The burn is continuous now, but the margin also keeps it
+    // monotonic — see planHop.) A FACTOR rather than an absolute margin, so the longest
     // un-boosted flight stays bounded at ~cruiseWindowMs x this at every slider setting.
     boostTriggerFactor: 1.4,
     boostBurstCount: 14,        // embers thrown off the nozzle at boost ignition
-    boostWakePx: 1500,          // visible tail of the skipped chord (the rest is off-camera)
+    // The burn itself (planHop): a continuous flight up the same curve, never a skip. Its
+    // average speed is at least boostSpeedFactor x the slider, and it lasts between these
+    // bounds, so a 40,000px hop still reaches its final approach in a few seconds.
+    boostSpeedFactor: 10,
+    boostMinMs: 1500,
+    boostMaxMs: 4500,
     maxCruiseDurationMs: 60000, // runaway guard ONLY; planCruise + the window keep flights far
                                 // below it, so if this ever bites it is a bug (it warns)
     jumpDurationMs: 700,  // every warp CSS animation interpolates this, so all FX rescale together
@@ -950,6 +957,9 @@
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame { opacity: 1; transform: scaleX(1.55); }
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 80ms steps(2) infinite; }
     #wikinaut-ship-shell[data-thrust="launch"] .wikinaut-ship-flame-mid { opacity: 0.95; }
+    /* Boost burn: the long torch in the ship's own color for as long as the burn lasts. */
+    #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-flame { opacity: 1; transform: scaleX(1.55); }
+    #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-flame-flicker { animation: wikinaut-flame-flicker2 80ms steps(2) infinite; }
     @keyframes wikinaut-flame-flicker2 {
       0%   { transform: scaleX(0.9) scaleY(1.06); opacity: 0.82; }
       100% { transform: scaleX(1.1) scaleY(0.94); opacity: 1; }
@@ -1150,8 +1160,8 @@
       100% { transform: scaleX(0.04) scaleY(0.32); opacity: 0; }
     }
 
-    /* Boost burn: the ship stretches along its heading and snaps BACK. It is skipping up the
-       flight path, not leaving the page, so it must not reuse [data-pose="warp"] — that one
+    /* Boost ignition: the ship stretches along its heading and snaps BACK. It is burning up
+       the flight path, not leaving the page, so it must not reuse [data-pose="warp"] — that one
        ends the keyframe at opacity 0 and holds there (animation-fill-mode: forwards),
        which made the ship vanish for the rest of the hop. */
     #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-body {
@@ -3819,20 +3829,23 @@
         return;
       }
 
-      await Traversal.boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow);
-
       const start = shipDoc();
       const planned = targetDoc();
       const {p0, p1, p2, p3} = buildFlightPath(start, planned, runtime.figureAngle);
       const lut = buildArcLengthLut(p0, p1, p2, p3);
-      // Peak velocity is exactly `speed` px/s here, on every hop — planCruise derives the
-      // duration FROM the ramps so the trapezoid profile and the clock cannot disagree. The
-      // ramps themselves are wall-clock (a long flight never leaps to cruise in its first
-      // frames) and beat()-scaled, so the launch surge tracks the speed setting too.
-      const {duration, rampUp, rampDown} = planCruise(lut.total, speed, beat(900), beat(700));
+      // Peak velocity is exactly `speed` px/s on every hop the ship flies under its own power —
+      // planCruise derives the duration FROM the ramps so the trapezoid profile and the clock
+      // cannot disagree — and a hop too long for that burns continuously up the same curve,
+      // then hands off to exactly that speed for the final window (planHop). The ramps are
+      // wall-clock (a long flight never leaps to cruise in its first frames) and beat()-scaled,
+      // so the launch surge tracks the speed setting too.
+      const hop = planHop(lut.total, speed, beat(900), beat(700));
+      const {duration} = hop;
       if (duration >= CONFIG.maxCruiseDurationMs) {
         console.warn('[Wikinaut] wn/cruise-runaway', {distance: lut.total, speed, duration});
       }
+      let burning = hop.boostMs > 0;
+      if (burning) Traversal.igniteBoost();
       const lockMs = beat(900);
       const startScroll = window.scrollY;
       const startAngle = runtime.figureAngle;
@@ -3880,19 +3893,24 @@
           y: drift.y + (measured.y - drift.y) * ease,
         };
 
-        // Constant perceived speed: trapezoid distance profile → arc-length LUT → t.
-        const t = lut.tForDistance(lut.total * trapezoidDistance(progress, rampUp, rampDown));
+        // Constant perceived speed: the hop's distance profile → arc-length LUT → t.
+        const elapsed = progress * duration;
+        if (burning && elapsed >= hop.boostMs) {
+          burning = false;
+          Figure.pose('walking');   // burn over: back to the cruise flame for the approach
+        }
+        const t = lut.tForDistance(hop.distanceAt(elapsed));
         const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x) + drift.x * t;
         const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y) + drift.y * t;
 
         // Face the tangent (including the drift correction's own contribution); ease out any
         // initial mismatch between the parked heading and the curve's first tangent over the
-        // accel ramp so the nose never snaps.
+        // accel ramp (or the opening of a burn) so the nose never snaps.
         const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x) + drift.x;
         const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y) + drift.y;
         let angle = runtime.figureAngle;
         if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-        if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
+        if (elapsed < hop.turnMs) angle = lerpAngle(startAngle, angle, elapsed / hop.turnMs);
 
         // Camera: scroll so the ship rides the comfort line. Eases into lock over the first
         // ~0.9s of real time (no jump at launch, and no seconds-long lag on slow hops), then
@@ -3900,7 +3918,7 @@
         // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
         // near the edges the ship traverses the viewport instead.
         const follow = clamp(y + half - restLineY, 0, maxScroll);
-        const lockT = Math.min(1, (progress * duration) / lockMs);
+        const lockT = Math.min(1, elapsed / lockMs);
         const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
         const guardTop = lerp(Math.min(startCenterY, frameTop), frameTop, lockT);
         let camera = lerp(startScroll, follow, lockT);
@@ -3928,80 +3946,21 @@
       Figure.pose('look');
     },
 
-    // Hops too long to fly whole. Compressing them into a fixed time ceiling was the old
-    // behaviour, and it silently overrode the speed setting: the cap bit at 6600px on the
-    // default 550 px/s (routine on a tall article) and at 1200px on the slowest setting, so
-    // long hops flew arbitrarily faster than short ones and the slider stopped mattering.
+    // Ignition for a hop too long to fly whole (planHop decides; the cruise flies the burn).
+    // Compressing such hops into a fixed time ceiling was the original behaviour, and it
+    // silently overrode the speed setting; skipping the ship up the path was the next one, and
+    // it scrolled the page and moved the ship tens of thousands of pixels in ONE frame, which
+    // players read as a glitchy teleport. The burn is continuous flight on the same curve.
     //
-    // Cap the flown DISTANCE instead. The ship boosts — it lights its drive and skips up the
-    // flight path — and flies the final window under its own power at exactly the slider
-    // speed. Every hop's visible approach is the same pace, whatever the distance.
-    //
-    // TWO things this must not be, both of them player-reported:
-    //  - It must not LOOK like the hyperspace jump. The boost used to render a ring + core
-    //    into dom.ripLayer — the jump layer, with the jump's own elements — so a burn that
-    //    happens seconds after Launch read as the ship jumping pages early. The boost is the
-    //    ship's own drive, so it is drawn with the ship's own wash (pose + Trail) and never
-    //    touches the jump layer, which now belongs solely to departures and emergency warps.
-    //  - It must not fire to skip nothing. The trigger and the flown window used to be the
-    //    SAME number, so a 5000px hop played the whole flourish to skip 50px — 1% of the
-    //    path — and on a tall article that is most hops. boostTriggerFactor is the margin.
-    async boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow) {
+    // It must not LOOK like the hyperspace jump either: the boost once drew a ring + core into
+    // dom.ripLayer with the jump's own elements, so it read as the ship jumping pages seconds
+    // after Launch. The burn is the ship's own drive, drawn with the ship's own vocabulary
+    // (pose + Trail); the jump layer belongs solely to departures and emergency warps.
+    igniteBoost() {
       const half = CONFIG.figureSize / 2;
-      const windowPx =
-        Math.max((speed * CONFIG.cruiseWindowMs) / 1000, CONFIG.minCruiseWindowPx);
-      const start = {
-        x: runtime.figurePosition.x + window.scrollX,
-        y: runtime.figurePosition.y + window.scrollY,
-      };
-      const end = targetDoc();
-      const span = Math.hypot(end.x - start.x, end.y - start.y);
-      if (span <= windowPx * CONFIG.boostTriggerFactor) return;
-
-      const skip = 1 - windowPx / span;
-      const boostTo = {x: lerp(start.x, end.x, skip), y: lerp(start.y, end.y, skip)};
-
-      // Ignition: the ship stretches along its heading (data-pose="boost") and throws a
-      // shower of embers off the nozzle — the same vocabulary as liftoff and touchdown, so
-      // it reads as the drive burning rather than as a hole torn in space.
       Figure.pose('boost');
       Trail.burst(
         runtime.figurePosition.x + half, runtime.figurePosition.y + half, CONFIG.boostBurstCount);
-      await sleep(beat(200));
-
-      window.scrollTo(window.scrollX, clamp(boostTo.y + half - restLineY, 0, maxScrollNow()));
-      Figure.headToward(boostTo.x, boostTo.y, end.x, end.y);
-      Figure.moveTo(boostTo.x - window.scrollX, boostTo.y - window.scrollY);
-      // Lay a burn streak into the new position instead of erasing the wake outright. Only
-      // the TAIL of the skipped chord is seeded: the span can be tens of thousands of pixels
-      // and all but the last screenful of it is off-camera once the scroll lands.
-      Trail.clearRibbon();
-      Traversal._seedBoostWake(start, boostTo);
-      Trail.burst(
-        runtime.figurePosition.x + half, runtime.figurePosition.y + half,
-        Math.round(CONFIG.boostBurstCount / 2));
-      Figure.pose('walking');
-      await sleep(beat(120));
-    },
-
-    // The visible tail of a boost: trail points along the last CONFIG.boostWakePx of the
-    // skipped chord, in document coords (Trail flies in document space, so the wake streams
-    // past with the page exactly as a flown one would). Sampled by distance rather than by
-    // frame, because none of this happened over frames.
-    _seedBoostWake(from, to) {
-      const dx = to.x - from.x;
-      const dy = to.y - from.y;
-      const chord = Math.hypot(dx, dy);
-      if (chord < 1) return;
-      const tail = Math.min(chord, CONFIG.boostWakePx);
-      const steps = 10;
-      const now = performance.now();
-      const half = CONFIG.figureSize / 2;
-      for (let i = 0; i <= steps; i += 1) {
-        const along = chord - tail + (tail * i) / steps;
-        const t = along / chord;
-        Trail.addPointDoc(from.x + dx * t + half, from.y + dy * t + half, now);
-      }
     },
 
     // Set the ship down exactly on the link. Re-measures the anchor fragment and, if the page
@@ -5042,6 +5001,57 @@
     }
     const duration = rampUpMs + rampDownMs + (distance - rampDist) / v;
     return {duration, rampUp: rampUpMs / duration, rampDown: rampDownMs / duration};
+  }
+
+  // Plan a whole hop as a time → distance-along-the-curve mapping, so the cruise asks one
+  // question per frame ("how far along am I at this many ms?") whether or not it boosts.
+  //
+  // Hops up to the flight window (speed x CONFIG.cruiseWindowMs, with the trigger margin) fly
+  // planCruise's trapezoid: peak velocity exactly the slider. Longer hops BURN: the ship lights
+  // its drive and covers everything but the final window on the SAME curve, accelerating from
+  // rest and decelerating smoothly back to the slider speed at the handoff, then flies the
+  // window at the slider speed and lands on the usual ramp. The burn is a cubic Hermite in
+  // time (zero velocity at ignition, exactly slider velocity at the handoff), so position and
+  // velocity are both continuous: the ship never skips. It used to — the old boost scrolled the
+  // page and moved the ship tens of thousands of pixels in one frame, which read as the ship
+  // teleporting. boostMs is capped, so the longest hop still costs a bounded amount of time.
+  function planHop(distance, speed, rampUpMs = 900, rampDownMs = 700) {
+    const v = Math.max(speed, 1) / 1000;   // px per ms
+    const windowPx = Math.max(v * CONFIG.cruiseWindowMs, CONFIG.minCruiseWindowPx);
+    if (distance <= windowPx * CONFIG.boostTriggerFactor) {
+      const {duration, rampUp, rampDown} = planCruise(distance, speed, rampUpMs, rampDownMs);
+      return {
+        duration,
+        boostMs: 0,
+        turnMs: rampUp * duration,
+        distanceAt: (ms) => distance * trapezoidDistance(ms / duration, rampUp, rampDown),
+      };
+    }
+
+    const burn = distance - windowPx;
+    // Average burn speed at least boostSpeedFactor x the slider, within the time bounds — and
+    // never so long that the Hermite would have to back up to meet the handoff velocity
+    // (monotonic only while burn >= v * boostMs / 3).
+    const boostMs = Math.min(
+      clamp(burn / (v * CONFIG.boostSpeedFactor), CONFIG.boostMinMs, CONFIG.boostMaxMs),
+      (3 * burn) / v);
+    const flatMs = Math.max(0, windowPx / v - rampDownMs / 2);
+    const handoff = v * boostMs;   // the Hermite's end tangent, in τ units
+    return {
+      duration: boostMs + flatMs + rampDownMs,
+      boostMs,
+      turnMs: boostMs * 0.35,
+      distanceAt(ms) {
+        if (ms <= boostMs) {
+          const t = clamp(ms / boostMs, 0, 1);
+          return burn * (3 * t * t - 2 * t * t * t) + handoff * (t * t * t - t * t);
+        }
+        const cruiseMs = ms - boostMs;
+        if (cruiseMs <= flatMs) return burn + v * cruiseMs;
+        const q = Math.min(cruiseMs - flatMs, rampDownMs);
+        return Math.min(distance, burn + v * flatMs + v * q - (v * q * q) / (2 * rampDownMs));
+      },
+    };
   }
 
   // Trapezoid velocity profile: accel/decel ramps at each end, constant cruise between.
