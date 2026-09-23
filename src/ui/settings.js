@@ -60,6 +60,17 @@
       return (Settings._cache ?? SETTINGS_DEFAULTS)[key] ?? SETTINGS_DEFAULTS[key];
     },
 
+    // Beat tempo derived from the flight-speed slider, relative to the default pace: a fast
+    // setting shortens every cinematic hold, a slow one stretches it, so the setting governs
+    // the whole flight rather than only the cruise. Bounded at both ends so the FX never become
+    // unreadably quick or interminable. Consumed by beat() (JS holds) and by --wn-tempo (the
+    // warp CSS animations), which is what keeps the two in step.
+    tempo() {
+      const speed =
+        Number(Settings.get('walkingPixelsPerSecond')) || SETTINGS_DEFAULTS.walkingPixelsPerSecond;
+      return clamp(SETTINGS_DEFAULTS.walkingPixelsPerSecond / speed, 0.55, 1.8);
+    },
+
     // The derived colorway for the player's color (memoized per raw value). The raw pick
     // stays stored and shown in the color input; only the EMITTED colors are contrast-
     // lifted, so re-opening settings never mutates what the player chose.
@@ -100,6 +111,7 @@
       // The ship shell and jump layer leave #wikinaut-root while a journey is active
       // (JourneyPortal mounts them on document.body), so every var must be set on each
       // host directly — a var set only on the root can't reach them there.
+      const tempo = Settings.tempo();
       for (const el of [dom.root, dom.figure, dom.ripLayer]) {
         if (!el) continue;
         for (const [name, hex] of Object.entries(vars)) {
@@ -108,6 +120,9 @@
             el.style.setProperty(`${name}-rgb`, paletteChannels(hex));
           }
         }
+        // Not a color: the unitless multiplier every warp animation's duration is calc()'d by,
+        // so the CSS beats track the speed slider exactly as the JS ones do.
+        el.style.setProperty('--wn-tempo', String(tempo));
       }
     },
   };

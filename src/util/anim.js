@@ -1,17 +1,30 @@
   // ─── Animation helpers ───────────────────────────────────────────────────────
 
   // Tween driver on the shared FxLoop: concurrent animations (a cruise + the trail canvas)
-  // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
+  // ride one rAF chain instead of racing separate ones. Every caller is part of a flight, so
+  // the tween rejects with FlightAbandoned once the player aborts. A throwing onFrame REJECTS the
   // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
   // await would strand forever and the engine's error handling (stall + retry) never engage.
+  //
+  // onFrame receives the FRAME TIMESTAMP as well as the progress, and anything a frame stamps
+  // must use it rather than calling performance.now() again. The trail used to stamp its
+  // points with a fresh performance.now() inside the callback and then age them against this
+  // rAF `now`, which is EARLIER — so the freshest point had a negative age every frame and the
+  // head of the plume was over-driven in proportion to how long the frame took to run.
+  // `start` is seeded from the first frame, not from call time, so a tween that begins on a
+  // busy frame doesn't silently skip its opening.
   function animate(duration, onFrame) {
     return new Promise((resolve, reject) => {
-      const start = performance.now();
+      let start = null;
       FxLoop.add(function tick(now) {
         let progress;
         try {
+          // An aborted flight stops driving the page on the very next frame, whichever tween
+          // is live — cruise, launch climb, or the pre-jump camera settle.
+          if (runtime.abortRequested) throw new FlightAbandoned();
+          if (start === null) start = now;
           progress = clamp((now - start) / duration, 0, 1);
-          onFrame(progress);
+          onFrame(progress, now);
         } catch (error) {
           reject(error);
           return false;
@@ -21,6 +34,14 @@
         return false;
       });
     });
+  }
+
+  // Wall-clock beat, scaled by the flight-speed setting. EVERY fixed cinematic hold in a flight
+  // goes through this, so the whole tempo follows the slider and not just the cruise: ~1.5s of
+  // fixed holds run per page (warp-in, touchdown, departure), which swamped the cruise on short
+  // hops and made the setting read as inert.
+  function beat(ms) {
+    return Math.round(ms * Settings.tempo());
   }
 
   function sleep(ms) {
@@ -156,6 +177,34 @@
         return ts[lo - 1] + (ts[lo] - ts[lo - 1]) * ((d - ds[lo - 1]) / seg);
       },
     };
+  }
+
+  // Plan one hop's velocity profile: the ramps trapezoidDistance() wants, plus the duration
+  // that makes them true. Peak velocity is EXACTLY `speed` px/s on any hop long enough to reach
+  // it, and the acceleration is identical on hops that aren't — so two hops at one slider
+  // setting cruise at the same speed, which is the entire point of the setting.
+  //
+  // Deriving the duration from the ramps (rather than the other way round) is what fixes it.
+  // The old code computed duration = distance/speed and then passed wall-clock ramp FRACTIONS,
+  // but trapezoidDistance normalizes distance over duration, so its peak is
+  // 1/(1-(rampUp+rampDown)/2) x nominal: 1.6x on a short hop, 1.11x on a long one. Hops at the
+  // same setting cruised up to 44% apart.
+  function planCruise(distance, speed, rampUpMs = 900, rampDownMs = 700) {
+    const v = Math.max(speed, 1) / 1000;                  // px per ms
+    const rampDist = (v * (rampUpMs + rampDownMs)) / 2;   // area under both ramp triangles
+    if (distance <= rampDist) {
+      // Too short to reach cruise: shrink both ramps by one factor so the ship still
+      // accelerates at the standard RATE and simply tops out lower (peak = s * speed).
+      const s = Math.sqrt(Math.max(distance, 0) / Math.max(rampDist, 1e-6));
+      const span = Math.max(rampUpMs * s + rampDownMs * s, 1);
+      return {
+        duration: Math.max(span, CONFIG.minCruiseDurationMs),
+        rampUp: (rampUpMs * s) / span,
+        rampDown: (rampDownMs * s) / span,
+      };
+    }
+    const duration = rampUpMs + rampDownMs + (distance - rampDist) / v;
+    return {duration, rampUp: rampUpMs / duration, rampDown: rampDownMs / duration};
   }
 
   // Trapezoid velocity profile: accel/decel ramps at each end, constant cruise between.

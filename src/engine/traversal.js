@@ -30,7 +30,8 @@
           Storage.save({...state, currentIndex});
         }
 
-        renderRoute(state.route, currentIndex, currentIndex + 1);
+        renderRoute(state.route, currentIndex, currentIndex + 1, alternateRoutes(),
+          runtime.routeIndex);
 
         const isFinal = currentIndex >= state.route.length - 1;
         const nextTitle = isFinal ? null : state.route[currentIndex + 1];
@@ -64,6 +65,7 @@
 
         if (arrivePromise) {
           await arrivePromise;
+          Traversal.checkpoint();
           // Consume the entry once used.
           Storage.saveRoute(state.route, {active: true, currentIndex});
         }
@@ -74,6 +76,7 @@
         }
 
         const {link, aliases, candidateCount} = await scanPromise;
+        Traversal.checkpoint();
 
         if (!link) {
           // The DOM scan still couldn't surface the link (a redirect alias the title text
@@ -106,11 +109,19 @@
         // airborne off the pad; on later pages it has just dropped out of warp at the
         // entry position (Transition arrival) — either way, no dock to leave.
         await Traversal.cruiseToLink(link);
+        Traversal.checkpoint();
         setStatus(`Target acquired: ${nextTitle}. Charging jump drive.`);
         await Traversal.walkToLink(link);
+        Traversal.checkpoint();
 
         await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
+        // A superseded or aborted flight is a clean stop, not a fault — don't narrate it at
+        // the player. An abort still owes its final sweep, now that the loop has unwound.
+        if (error instanceof FlightAbandoned) {
+          if (runtime.abortRequested) Traversal.settleAbort();
+          return;
+        }
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
@@ -121,6 +132,9 @@
         dom.beginButton.disabled = false;
         Figure.hide();
       } finally {
+        // Retire this flight's generation FIRST: any frame callback still in flight sees the
+        // change on its next tick and stops driving the page.
+        runtime.flightGeneration += 1;
         LinkFx.clearReticle();
         JourneyPortal.deactivate();
         if (dom.panel) delete dom.panel.dataset.jumping;  // un-fade if a jump aborted
@@ -168,7 +182,14 @@
     async _jumpThrough(link, nextTitle, currentIndex, route) {
       let anchor;
       try {
-        const watchdogMs = CONFIG.jumpDurationMs + 600;
+        // beat()-scaled, because everything it races is: tearThrough runs
+        // beat(220) + beat(140) + beat(jumpDurationMs) = 1060 x tempo, and tempo reaches 1.8
+        // at the slowest speed setting. A fixed 1300ms guard lost that race and clicked
+        // through while the ship was still mid-warp-stretch — the jump cutting its own
+        // animation off. This stays a real watchdog; it just always sits BEYOND the FX, at
+        // ~1.9x its cost. The trailing hold in tearThrough is sized off jumpDurationMs too,
+        // so the two move together: if that grows, so does this.
+        const watchdogMs = beat(CONFIG.jumpDurationMs * 2 + 600);
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -177,8 +198,12 @@
         console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
         anchor = null;
       }
+      // The departure FX take ~1s, and the player may abort inside them (tearThrough then
+      // rejects into the catch above, which would otherwise jump anyway). Last exit before
+      // the advanced route is saved and the link is clicked.
+      Traversal.checkpoint();
       if (!anchor) {
-        anchor = Transition.anchorFromLink(link, link.getBoundingClientRect());
+        anchor = Transition.anchorFromLink(link);
       }
 
       Storage.saveRoute(route, {
@@ -190,6 +215,10 @@
           angle: runtime.figureAngle,
         },
       });
+      // Retire the flight generation before navigating: if the watchdog above won the race,
+      // tearThrough's own scroll tween may still be live, and it must not keep scrolling the
+      // document out from under the navigation.
+      runtime.flightGeneration += 1;
       link.click();
     },
 
@@ -217,7 +246,8 @@
 
     // Document-space flight: the article is the world, the scroll is the camera. One cubic
     // bézier per hop, planned in document coordinates from the ship's current position to the
-    // link's center; the ship faces the curve's true tangent every frame while the camera
+    // link's ANCHOR FRAGMENT (anchorRect, never the union getBoundingClientRect — see
+    // util/geom.js); the ship faces the curve's true tangent every frame while the camera
     // scrolls to keep it riding the comfort line — the page streams underneath the ship.
     async cruiseToLink(link) {
       const speed = Settings.get('walkingPixelsPerSecond');
@@ -228,38 +258,57 @@
       // Comfort line: where the ship rides in the viewport — upper-middle (~40% down), kept
       // below the masthead and clear of the console band.
       const restLineY = clamp(window.innerHeight * 0.4, 100, panelObstacleRect().top - 100);
-      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      // Re-read as the flight runs, not captured once: the cruise's own scrolling is precisely
+      // what triggers Wikipedia's lazy images and MathML to resolve, so scrollHeight grows
+      // DURING the flight and a captured ceiling clamps the camera against a stale bottom.
+      //
+      // But reading scrollHeight forces a synchronous layout, and doing it inside the frame
+      // callback — right after that frame's scrollTo — did it ~60 times a second on a document
+      // the size of a long Wikipedia article. Lazy content resolves over hundreds of
+      // milliseconds, not between frames, so the loop below refreshes this on a slow cadence
+      // and reads the cached value otherwise.
+      const maxScrollNow = () =>
+        Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
 
       // The ship's fixed-position transform is viewport-space; the flight is planned and flown
       // in document space and converted per frame (viewport = doc − scroll).
-      const start = {
+      const shipDoc = () => ({
         x: runtime.figurePosition.x + window.scrollX,
         y: runtime.figurePosition.y + window.scrollY,
-      };
-      const rect = link.getBoundingClientRect();
-      const end = {
-        x: rect.left + rect.width / 2 + window.scrollX - half,
-        y: rect.top + rect.height / 2 + window.scrollY - half,
+      });
+      const targetDoc = () => {
+        const rect = anchorRect(link);
+        return {
+          x: rect.left + rect.width / 2 + window.scrollX - half,
+          y: rect.top + rect.height / 2 + window.scrollY - half,
+        };
       };
 
       if (prefersReducedMotion()) {
-        window.scrollTo(0, clamp(end.y + half - restLineY, 0, maxScroll));
-        const t = Figure.targetAtLink(link);
-        Figure.headToward(start.x, start.y, end.x, end.y);
-        Figure.moveTo(t.x, t.y);
+        const end = targetDoc();
+        window.scrollTo(window.scrollX, clamp(end.y + half - restLineY, 0, maxScrollNow()));
+        const settled = Figure.targetAtRect(anchorRect(link));
+        Figure.headToward(runtime.figurePosition.x, runtime.figurePosition.y, settled.x, settled.y);
+        Figure.moveTo(settled.x, settled.y);
         Figure.pose('look');
         return;
       }
 
-      const {p0, p1, p2, p3} = buildFlightPath(start, end, runtime.figureAngle);
+      await Traversal.boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow);
+
+      const start = shipDoc();
+      const planned = targetDoc();
+      const {p0, p1, p2, p3} = buildFlightPath(start, planned, runtime.figureAngle);
       const lut = buildArcLengthLut(p0, p1, p2, p3);
-      const duration = clamp(
-        (lut.total / speed) * 1000, CONFIG.minWalkDurationMs, CONFIG.maxCruiseDurationMs);
-      // Wall-clock-derived velocity ramps: the take-off build-up (~0.9s) and touchdown ease
-      // (~0.7s) last the same real time on short and long hops alike, so a long flight never
-      // leaps to cruise speed in its first frames.
-      const rampUp = clamp(900 / duration, 0.1, 0.4);
-      const rampDown = clamp(700 / duration, 0.1, 0.35);
+      // Peak velocity is exactly `speed` px/s here, on every hop — planCruise derives the
+      // duration FROM the ramps so the trapezoid profile and the clock cannot disagree. The
+      // ramps themselves are wall-clock (a long flight never leaps to cruise in its first
+      // frames) and beat()-scaled, so the launch surge tracks the speed setting too.
+      const {duration, rampUp, rampDown} = planCruise(lut.total, speed, beat(900), beat(700));
+      if (duration >= CONFIG.maxCruiseDurationMs) {
+        console.warn('[Wikinaut] wn/cruise-runaway', {distance: lut.total, speed, duration});
+      }
+      const lockMs = beat(900);
       const startScroll = window.scrollY;
       const startAngle = runtime.figureAngle;
       // Comfort band the camera must keep the ship inside while it eases into lock — the ship
@@ -270,20 +319,55 @@
       const frameBottom = Math.min(window.innerHeight - 90, window.innerHeight * 0.82);
       const startCenterY = start.y + half - startScroll;
 
-      await animate(duration, (progress) => {
+      // Endpoint drift correction. Lazy images and MathML resolving mid-cruise move the target
+      // in document space, and the old code absorbed the whole error with a hard snap at
+      // touchdown. Instead: re-measure periodically, ease the measured delta in, and apply it
+      // weighted by curve progress so the TAIL of the path bends onto the new target while the
+      // ship's current position never jumps.
+      let drift = {x: 0, y: 0};      // eased, what's actually applied
+      let measured = {x: 0, y: 0};   // latest raw delta from the planned endpoint
+      let frame = 0;
+      let lastNow = null;
+      let maxScroll = maxScrollNow();
+      const generation = runtime.flightGeneration;
+
+      await animate(duration, (progress, now) => {
+        // A flight that has already been torn down (an error path ran resume()'s finally while
+        // this tween was live) must stop DRIVING THE PAGE. Nothing used to check: the tween
+        // kept scrolling the document and moving a hidden ship to completion, long after the
+        // console had gone to STALLED.
+        if (runtime.flightGeneration !== generation) throw new FlightAbandoned();
+
+        const dt = lastNow === null ? 0 : Math.max(0, now - lastNow);
+        lastNow = now;
+
+        frame += 1;
+        // The two forced-layout reads of the loop, deliberately on different frames so no
+        // single frame pays for both.
+        if (frame % 6 === 0) {
+          const live = targetDoc();
+          measured = {x: live.x - planned.x, y: live.y - planned.y};
+        }
+        if (frame % 10 === 3) maxScroll = maxScrollNow();
+        const ease = Math.min(1, dt / 250);
+        drift = {
+          x: drift.x + (measured.x - drift.x) * ease,
+          y: drift.y + (measured.y - drift.y) * ease,
+        };
+
         // Constant perceived speed: trapezoid distance profile → arc-length LUT → t.
         const t = lut.tForDistance(lut.total * trapezoidDistance(progress, rampUp, rampDown));
-        const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x);
-        const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y);
+        const x = cubicBezier(t, p0.x, p1.x, p2.x, p3.x) + drift.x * t;
+        const y = cubicBezier(t, p0.y, p1.y, p2.y, p3.y) + drift.y * t;
 
-        // Face the tangent; ease out any initial mismatch between the parked heading and the
-        // curve's first tangent over the accel ramp so the nose never snaps.
-        const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x);
-        const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y);
+        // Face the tangent (including the drift correction's own contribution); ease out any
+        // initial mismatch between the parked heading and the curve's first tangent over the
+        // accel ramp so the nose never snaps.
+        const dx = cubicBezierDerivative(t, p0.x, p1.x, p2.x, p3.x) + drift.x;
+        const dy = cubicBezierDerivative(t, p0.y, p1.y, p2.y, p3.y) + drift.y;
         let angle = runtime.figureAngle;
         if (Math.hypot(dx, dy) > 1e-3) angle = (Math.atan2(dy, dx) * 180) / Math.PI;
         if (progress < rampUp) angle = lerpAngle(startAngle, angle, progress / rampUp);
-        Figure.setAngle(angle);
 
         // Camera: scroll so the ship rides the comfort line. Eases into lock over the first
         // ~0.9s of real time (no jump at launch, and no seconds-long lag on slow hops), then
@@ -291,40 +375,138 @@
         // leave [frameTop, frameBottom]; the document-edge clamp is applied last and wins —
         // near the edges the ship traverses the viewport instead.
         const follow = clamp(y + half - restLineY, 0, maxScroll);
-        const lockT = Math.min(1, (progress * duration) / 900);
+        const lockT = Math.min(1, (progress * duration) / lockMs);
         const guardBottom = lerp(Math.max(startCenterY, frameBottom), frameBottom, lockT);
         const guardTop = lerp(Math.min(startCenterY, frameTop), frameTop, lockT);
         let camera = lerp(startScroll, follow, lockT);
         camera = clamp(camera, y + half - guardBottom, y + half - guardTop);
         camera = clamp(camera, 0, maxScroll);
-        window.scrollTo(0, camera);
+        // Preserve horizontal scroll (scrollTo(0, …) yanked wide tables back to the left every
+        // frame), and place the ship from the ACHIEVED scroll, not the requested one: a skin's
+        // smooth-scroll, scroll anchoring or rubber-banding makes them differ, and the error
+        // then rode along for the rest of the flight.
+        window.scrollTo(window.scrollX, camera);
 
-        Figure.moveTo(x - window.scrollX, y - camera);
-        Trail.addPoint(runtime.figurePosition.x, runtime.figurePosition.y);
-        JourneyPortal.ensureAbovePanel();
+        // ONE scroll read per frame, after the frame's only scroll write, shared by everything
+        // downstream. Each of these reads forces a layout flush; the loop used to take three
+        // (ship placement, then Trail's own, then Trail._draw's) interleaved with style writes.
+        const scrollX = window.scrollX;
+        const scrollY = window.scrollY;
+        // Heading and position in a single transform write (setAngle would have made it two).
+        Figure.place(x - scrollX, y - scrollY, angle);
+        // Document coords straight through — the cruise already has them.
+        Trail.addPointDoc(x + half, y + half, now);
       });
 
-      // Land on the link's live rect — absorbs any layout shift during the flight.
-      const settled = Figure.targetAtLink(link);
-      Figure.moveTo(settled.x, settled.y);
+      // Land on the link's live anchor — absorbs whatever the drift correction didn't.
+      await Traversal.settleOnLink(link);
       Figure.pose('look');
     },
 
-    async walkToLink(link) {
-      // The cruise already set the ship down on the link; re-snap (in case the page
-      // shifted), settle, and charge the jump drive. The link may have been re-hidden DURING
-      // the cruise (MediaWiki collapses navboxes seconds after load) — reopen its container
-      // first so the touchdown lands on painted content, never on a phantom rect.
-      Links.ensureVisible(link);
-      const target = Figure.targetAtLink(link);
+    // Hops too long to fly whole. Compressing them into a fixed time ceiling was the old
+    // behaviour, and it silently overrode the speed setting: the cap bit at 6600px on the
+    // default 550 px/s (routine on a tall article) and at 1200px on the slowest setting, so
+    // long hops flew arbitrarily faster than short ones and the slider stopped mattering.
+    //
+    // Cap the flown DISTANCE instead. The ship boosts — it lights its drive and skips up the
+    // flight path — and flies the final window under its own power at exactly the slider
+    // speed. Every hop's visible approach is the same pace, whatever the distance.
+    //
+    // TWO things this must not be, both of them player-reported:
+    //  - It must not LOOK like the hyperspace jump. The boost used to render a ring + core
+    //    into dom.ripLayer — the jump layer, with the jump's own elements — so a burn that
+    //    happens seconds after Launch read as the ship jumping pages early. The boost is the
+    //    ship's own drive, so it is drawn with the ship's own wash (pose + Trail) and never
+    //    touches the jump layer, which now belongs solely to departures and emergency warps.
+    //  - It must not fire to skip nothing. The trigger and the flown window used to be the
+    //    SAME number, so a 5000px hop played the whole flourish to skip 50px — 1% of the
+    //    path — and on a tall article that is most hops. boostTriggerFactor is the margin.
+    async boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow) {
+      const half = CONFIG.figureSize / 2;
+      const windowPx =
+        Math.max((speed * CONFIG.cruiseWindowMs) / 1000, CONFIG.minCruiseWindowPx);
+      const start = {
+        x: runtime.figurePosition.x + window.scrollX,
+        y: runtime.figurePosition.y + window.scrollY,
+      };
+      const end = targetDoc();
+      const span = Math.hypot(end.x - start.x, end.y - start.y);
+      if (span <= windowPx * CONFIG.boostTriggerFactor) return;
+
+      const skip = 1 - windowPx / span;
+      const boostTo = {x: lerp(start.x, end.x, skip), y: lerp(start.y, end.y, skip)};
+
+      // Ignition: the ship stretches along its heading (data-pose="boost") and throws a
+      // shower of embers off the nozzle — the same vocabulary as liftoff and touchdown, so
+      // it reads as the drive burning rather than as a hole torn in space.
+      Figure.pose('boost');
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half, CONFIG.boostBurstCount);
+      await sleep(beat(200));
+
+      window.scrollTo(window.scrollX, clamp(boostTo.y + half - restLineY, 0, maxScrollNow()));
+      Figure.headToward(boostTo.x, boostTo.y, end.x, end.y);
+      Figure.moveTo(boostTo.x - window.scrollX, boostTo.y - window.scrollY);
+      // Lay a burn streak into the new position instead of erasing the wake outright. Only
+      // the TAIL of the skipped chord is seeded: the span can be tens of thousands of pixels
+      // and all but the last screenful of it is off-camera once the scroll lands.
+      Trail.clearRibbon();
+      Traversal._seedBoostWake(start, boostTo);
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half,
+        Math.round(CONFIG.boostBurstCount / 2));
+      Figure.pose('walking');
+      await sleep(beat(120));
+    },
+
+    // The visible tail of a boost: trail points along the last CONFIG.boostWakePx of the
+    // skipped chord, in document coords (Trail flies in document space, so the wake streams
+    // past with the page exactly as a flown one would). Sampled by distance rather than by
+    // frame, because none of this happened over frames.
+    _seedBoostWake(from, to) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const chord = Math.hypot(dx, dy);
+      if (chord < 1) return;
+      const tail = Math.min(chord, CONFIG.boostWakePx);
+      const steps = 10;
+      const now = performance.now();
+      const half = CONFIG.figureSize / 2;
+      for (let i = 0; i <= steps; i += 1) {
+        const along = chord - tail + (tail * i) / steps;
+        const t = along / chord;
+        Trail.addPointDoc(from.x + dx * t + half, from.y + dy * t + half, now);
+      }
+    },
+
+    // Set the ship down exactly on the link. Re-measures the anchor fragment and, if the page
+    // moved it out of the safe band (a navbox expanding at touchdown shifts the link and
+    // everything below it; a doc-edge-clamped camera can't reach targets at the very top or
+    // bottom of an article), eases the page back before landing. Returns the one rect every
+    // anchored layer — ship, reticle, burst, jump slit — then shares.
+    async settleOnLink(link) {
+      await Transition.scrollAnchorIntoBand(link);
+      const rect = anchorRect(link);
+      const target = Figure.targetAtRect(rect);
       Figure.moveTo(target.x, target.y);
-      Trail.clearRibbon();                                 // drop the cruise plume, keep embers
-      LinkFx.spawnReticle(link.getBoundingClientRect());   // scan→lock onto the target link
-      LinkFx.landingBurst(target.slitX, target.slitY);     // double shock-ring at touchdown
-      Trail.burst(target.slitX, target.slitY, 16);         // scattering touchdown embers
-      await sleep(140);
-      Figure.pose('grab');                                 // charge the jump drive
-      await sleep(220);
+      return {rect, target};
+    },
+
+    async walkToLink(link) {
+      // The cruise already set the ship down on the link; re-snap (in case the page shifted),
+      // settle, and charge the jump drive. The link may have been re-hidden DURING the cruise
+      // (MediaWiki collapses navboxes seconds after load) — reopen its container first so the
+      // touchdown lands on painted content, never on a phantom rect, and settleOnLink then
+      // corrects for the shift that reopening it just caused.
+      Links.ensureVisible(link);
+      const {rect, target} = await Traversal.settleOnLink(link);
+      Trail.clearRibbon();                         // drop the cruise plume, keep embers
+      LinkFx.spawnReticle(rect);                   // scan→lock onto the target link
+      LinkFx.landingBurst(target.slitX, target.slitY);   // double shock-ring at touchdown
+      Trail.burst(target.slitX, target.slitY, 16); // scattering touchdown embers
+      await sleep(beat(140));
+      Figure.pose('grab');                         // charge the jump drive
+      await sleep(beat(220));
     },
 
     // Fallback when the link can't be found in the live DOM: persist the advanced route
@@ -343,13 +525,15 @@
         const slitY = runtime.figurePosition.y + CONFIG.figureSize / 2;
         Transition.renderEmergencyWarp({slitX, slitY});
         Figure.pose('warp');
-        await sleep(260);
+        await sleep(beat(260));
         Figure.hide();
-        await sleep(60);
+        await sleep(beat(60));
       } else {
-        await sleep(prefersReducedMotion() ? 0 : 300);
+        await sleep(prefersReducedMotion() ? 0 : beat(300));
       }
 
+      // An abort during the flourish has already re-saved the route as inactive; don't leave.
+      Traversal.checkpoint();
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
     },
 
@@ -366,8 +550,11 @@
 
     async arrive(route) {
       Storage.clear();
-      renderRoute(route, route.length - 1, -1);
-      setStatus(`Arrived at ${route[route.length - 1]}. Course complete.`);
+      renderRoute(route, route.length - 1, -1, alternateRoutes(), runtime.routeIndex);
+      const hops = route.length - 1;
+      setStatus(
+        `Arrived at ${route[route.length - 1]} in ${hops} ${hops === 1 ? 'jump' : 'jumps'}. ` +
+          'Set a new destination to fly again.');
       Phase.set(PHASES.ARRIVED);
       // Victory flourish where the ship dropped out of warp, then it departs (fades out) —
       // the ship only exists for the duration of a flight.
@@ -379,9 +566,76 @@
       Trail.burst(vx, vy, 26);       // and a shower of sparks
       dom.beginButton.disabled = true;
       runtime.route = route;
-      await sleep(prefersReducedMotion() ? 600 : 1600);
+      await sleep(prefersReducedMotion() ? beat(600) : beat(1600));
       Figure.hide();
       Trail.clear();
       Phase.set(PHASES.IDLE);
+      // The destination is reached: clear it so the console reads as ready for the next
+      // voyage rather than offering to chart the course just flown (focus is left alone).
+      // Only if it still names this destination: the player may already be typing the next.
+      if (Titles.same(dom.input.value.trim(), route[route.length - 1])) {
+        dom.input.value = '';
+        runtime.selectedPage = null;
+      }
+      updateChartGate();
+    },
+
+    // ─── Abort ──────────────────────────────────────────────────────────────────
+    // The Launch key becomes Abort for the whole flight (syncFlightControls). Aborting keeps
+    // the course: the route is re-saved INACTIVE at the current page, so Launch resumes the
+    // voyage from here. The player gets immediate feedback (ship gone, status, phase); the
+    // flight loop itself unwinds at its next checkpoint or tween frame and then calls
+    // settleAbort for a final sweep of anything it drew on the way out.
+    abort() {
+      if (!inFlight() || runtime.abortRequested) return;
+      const route = runtime.route || Storage.load()?.route;
+      const here = Array.isArray(route)
+        ? Titles.indexInRoute(route, Titles.currentPageTitle())
+        : -1;
+      // Already on the destination page: the arrival is playing, let it finish.
+      if (Array.isArray(route) && here >= route.length - 1) return;
+
+      runtime.abortRequested = true;
+      if (here !== -1) Storage.saveRoute(route, {active: false, currentIndex: here});
+      else Storage.clear();
+      Traversal._clearFlightFx();
+      Phase.set(here !== -1 ? PHASES.COURSE_READY : PHASES.IDLE);
+      // Held disabled until the flight loop has unwound (settleAbort), so a quick re-Launch
+      // can't start a second flight while the first is still between awaits.
+      dom.beginButton.disabled = true;
+      setStatus(here !== -1
+        ? 'Flight aborted. Course held; press Launch to resume from here.'
+        : 'Flight aborted.');
+    },
+
+    // Throw out of the flight loop once the player has aborted. Placed after every await that
+    // is not a tween (tweens reject on their own, in animate) and before every save-and-navigate.
+    checkpoint() {
+      if (runtime.abortRequested) throw new FlightAbandoned();
+    },
+
+    // Called by the flight's owner (beginWalk or resume) once an aborted flight has unwound.
+    settleAbort() {
+      Traversal._clearFlightFx();
+      dom.beginButton.disabled = !Phase.is(PHASES.COURSE_READY);
+    },
+
+    // Idempotent: returns every flight layer to its resting state.
+    _clearFlightFx() {
+      LinkFx.clearReticle();
+      LaunchSequence.hideDigit();
+      Figure.hide();
+      Trail.clear();
+      if (dom.ripLayer) {
+        dom.ripLayer.dataset.open = 'false';
+        dom.ripLayer.replaceChildren();
+      }
+      if (dom.panel) {
+        delete dom.panel.dataset.launch;
+        delete dom.panel.dataset.jumping;
+      }
+      if (dom.figure) delete dom.figure.dataset.thrust;
+      if (dom.root) delete dom.root.dataset.shake;
+      JourneyPortal.deactivate();
     },
   };

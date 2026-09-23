@@ -47,7 +47,7 @@ scripts/          buildDatabase.sh and friends: download and process Wikipedia d
                   build_userscript.py assembles the frontend from src/
 src/              Userscript SOURCE, split by layer: ui/ (console, autocomplete, chart flow),
                   engine/ (routing, titles, storage, links, traversal), fx/ (ship, trail,
-                  star map, hyperspace), util/ (net, anim, color, text), plus config.js,
+                  star map, hyperspace), util/ (net, geom, anim, color, text), plus config.js,
                   styles.js (the CSS literal), state.js, init.js, and manifest.txt (build order)
 sql/              SQLite table schemas
 tests/            Backend pytest suite; runs against the mock graph, no network needed
@@ -119,6 +119,14 @@ article. Five things to handle:
   through `Titles.rawFromHref` (URL parse, same-hostname, and `/wiki/` pathname check,
   which also rejects Commons/Wiktionary links containing "/wiki/") and select with
   `SELECTORS.articleLink`.
+- **Never measure a link with `getBoundingClientRect`.** An `<a>` that wraps across two lines
+  has two layout fragments, and the bounding rect is their UNION — a box spanning both lines and
+  usually the whole column, whose center sits between the lines over unrelated text. The ship
+  then lands "near" the link and tears the jump slit open in blank space, deterministically, on
+  every wrapped link. Measure with `anchorRect` (`src/util/geom.js`), which picks the real
+  fragment out of `getClientRects()`. One measurement per touchdown, passed to every consumer —
+  and the ship's landing point and the jump slit must come from the same `Figure.targetAtRect`
+  call, or a viewport-edge clamp splits them.
 - **Phantom rects in collapsed navboxes.** MediaWiki collapses navbox rows with
   `hidden="until-found"` (`content-visibility: hidden`). Links inside keep a NONZERO
   bounding rect while unpainted, so display/visibility/zero-rect checks all pass and the
@@ -181,9 +189,42 @@ names, exactly as when it was one file. Consequences worth knowing:
   invisible to the player.
 - **The cruise is document-space.** `Traversal.cruiseToLink` plans one cubic Bézier per hop in
   document coordinates; the page scroll is the camera (time-based lock plus a hard frame guard
-  so the ship can never leave the viewport). The flight-speed setting is always honored.
-  `CONFIG.maxCruiseDurationMs` is a safety net for pathological hops, **not a pacing knob**;
-  lowering it silently overrides the player's speed slider on long flights.
+  so the ship can never leave the viewport). Re-measure the target and the scroll ceiling as the
+  flight runs: lazy images resolve *because* the cruise scrolls, so both drift.
+- **Pacing: cap the flown distance, never the duration.** `planCruise` (`util/anim.js`) derives
+  the hop duration *from* the ramps, so the trapezoid's peak velocity is exactly the slider's
+  px/s on every hop; deriving it the other way round (duration = distance/speed, then wall-clock
+  ramp fractions) made short hops cruise 1.6x nominal and long ones 1.11x. Hops too long to fly
+  whole BOOST (`Traversal.boostIfDistant`) up the flight path and then fly the final
+  `CONFIG.cruiseWindowMs` window at the slider speed. `CONFIG.maxCruiseDurationMs` is now only a
+  runaway guard that warns; do not reintroduce a duration cap as a pacing knob — it silently
+  overrides the player's slider, which is exactly the bug this replaced.
+- **The boost is the ship's drive, not a jump — keep it off the jump layer.** `boostIfDistant`
+  originally drew a ring + core into `dom.ripLayer` using the hyperspace jump's own elements, so
+  players read a mid-flight burn as the ship jumping pages seconds after Launch. It is now drawn
+  with the ship's own vocabulary only (`data-pose="boost"` plus `Trail.burst` / a seeded
+  `Trail.addPointDoc` wake); `dom.ripLayer` belongs solely to `tearThrough` and
+  `renderEmergencyWarp`. It also needs a real margin before it fires: the trigger and the flown
+  window used to be the same number, so a hop one pixel over the window played the whole
+  flourish to skip one pixel. `CONFIG.boostTriggerFactor` is that margin.
+- **A jump's JS holds must outlast its CSS.** Every warp keyframe runs
+  `calc(CONFIG.jumpDurationMs * var(--wn-tempo))`, and `@keyframes wikinaut-flash` (both
+  `.wikinaut-flash` and `.wikinaut-warp-core`) puts its whole white-out at `100%` on an `ease-in`
+  curve — so returning early doesn't shorten the effect, it deletes it. `tearThrough` and
+  `arrive` each hold the full `beat(CONFIG.jumpDurationMs)`. `Traversal._jumpThrough`'s watchdog
+  races `tearThrough` and is sized off the same constant: change one, change both.
+- **Every flight is abortable, so every new await in it needs an exit.** In flight
+  (`inFlight()`: countdown, launching, flying) the input is read-only, Chart is off, and the
+  Launch key is **Abort** (`syncFlightControls`, driven by `Phase.set`). `Traversal.abort()` sets
+  `runtime.abortRequested`; `animate()` then rejects every tween with `FlightAbandoned`, and
+  `Traversal.checkpoint()` covers the non-tween awaits. Any await you add to `beginWalk` or
+  `Traversal.resume` must be followed by a `checkpoint()`, and so must anything that saves an
+  advanced route and navigates (`_jumpThrough` before `link.click()`, `jumpByUrl` before
+  `location.assign`). Otherwise an abort during that await still jumps pages.
+- **The speed setting is the flight's tempo, not just the cruise.** `Settings.tempo()` scales
+  every fixed cinematic hold through `beat()` (touchdown, departure, warp-in, launch countdown)
+  and the warp CSS through `--wn-tempo`. ~1.5s of fixed holds run per page; unscaled they swamp
+  the cruise on short hops and the slider reads as inert. Any new hold goes through `beat()`.
 - **CSS custom properties don't reach body-mounted layers.** During a journey `JourneyPortal`
   moves `#wikinaut-ship-shell` and `#wikinaut-jump-layer` onto `document.body`, outside
   `#wikinaut-root`. A `var()` consumed there with no declaration on the layer itself is

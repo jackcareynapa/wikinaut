@@ -45,6 +45,7 @@ fx/link-fx.js
 fx/transition.js
 
 util/net.js
+util/geom.js
 util/anim.js
 util/color.js
 util/text.js

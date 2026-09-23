@@ -1,6 +1,7 @@
   // ─── Core flow ──────────────────────────────────────────────────────────────
 
   async function chartCourse() {
+    if (inFlight()) return;
     const targetTitle = dom.input.value.trim();
     const sourceTitle = Titles.currentPageTitle();
 
@@ -22,7 +23,9 @@
     Phase.set(PHASES.PLOTTING);
     setBusy(true, `Plotting a course: ${sourceTitle} → ${targetTitle}…`);
     closeSuggestions();
-    dom.routeStrip.replaceChildren();
+    // Collapse the previous chart rather than emptying it in place, which left a blank
+    // well open for the whole plotting wait.
+    renderRoute([]);
     dom.beginButton.disabled = true;
 
     try {
@@ -57,7 +60,35 @@
     }
   }
 
-  // The non-selected charted routes, for the star map's dim underlay fan.
+  // Phase.set calls this on every transition. In flight the destination input is read-only,
+  // Chart is off, and the Launch key is the Abort key; leaving flight restores Launch and
+  // DISABLES it by default. Every exit path that should leave it usable (a stall's retry, an
+  // abort's resume) re-enables it right after its own Phase.set, so none can inherit a live
+  // key by accident.
+  function syncFlightControls(prevPhase) {
+    if (!dom.beginButton) return;
+    const flying = inFlight();
+    const wasFlying = [PHASES.COUNTDOWN, PHASES.LAUNCHING, PHASES.FLYING].includes(prevPhase);
+    if (flying === wasFlying) return;
+    dom.input.readOnly = flying;
+    dom.chartButton.disabled = flying || !chartGateValid();
+    dom.beginButton.textContent = flying ? 'Abort' : 'Launch';
+    dom.beginButton.dataset.mode = flying ? 'abort' : 'launch';
+    if (flying) {
+      closeSuggestions();
+      dom.beginButton.setAttribute('aria-label', 'Abort flight');
+    } else {
+      dom.beginButton.removeAttribute('aria-label');
+    }
+    dom.beginButton.disabled = !flying;
+  }
+
+  // The Launch key's one handler: it is Abort for as long as a flight owns the page.
+  function onBeginButton() {
+    if (inFlight()) Traversal.abort();
+    else beginWalk();
+  }
+
   // The non-selected routes, each tagged with its STABLE lane (= index in runtime.routes) so
   // the star chart draws every route on the same lane no matter which one is selected.
   function alternateRoutes() {
@@ -72,7 +103,10 @@
   function updateRouteCycle() {
     if (!dom.routePager) return;
     const n = runtime.routes?.length || 0;
-    dom.routePager.hidden = n < 2;
+    // Only from the course's origin page: after a stall or an abort partway along, the
+    // console is course-ready again, but the other routes needn't pass through this page.
+    const midCourse = Titles.indexInRoute(runtime.route || [], Titles.currentPageTitle()) > 0;
+    dom.routePager.hidden = n < 2 || midCourse;
     if (n >= 2) dom.routeLabel.textContent = `Route ${runtime.routeIndex + 1}/${n}`;
   }
 

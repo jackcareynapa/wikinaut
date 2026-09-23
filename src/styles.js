@@ -24,6 +24,9 @@
     #wikinaut-jump-layer {
       ${PALETTE_CSS_VARS}
       --wn-ship-color: ${PALETTE.accent};
+      /* Beat tempo from the flight-speed setting; Settings.applyToDom republishes it on all
+         three hosts (the ship shell and jump layer leave #wikinaut-root during a journey). */
+      --wn-tempo: 1;
       color: var(--wn-parchment);
       font-family: ${TYPE.label};
     }
@@ -79,7 +82,7 @@
       font-family: ${TYPE.label};
       font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.2em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
       text-shadow: 0 1px 0 rgba(0,0,0,0.7);
@@ -149,6 +152,33 @@
       box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.5);
     }
 
+    /* One keyboard focus ring for every console control (the destination input keeps its own
+       inset treatment above). Browser defaults varied by control and vanished on the fascia. */
+    .wikinaut-button:focus-visible,
+    .wikinaut-range:focus-visible,
+    .wikinaut-color-input:focus-visible,
+    #wikinaut-backend-input:focus-visible {
+      outline: 2px solid var(--wn-accent-glow);
+      outline-offset: 2px;
+    }
+
+    /* In flight the Launch key is the Abort key: the quiet secondary cap with a signal-red
+       hairline, since stopping a flight is the one destructive action on the console. */
+    #wikinaut-begin-button[data-mode="abort"] {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.55),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+    #wikinaut-begin-button[data-mode="abort"]:hover:not(:disabled) {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.9),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+
     /* ── Autocomplete ──────────────────────────────────────────────────── */
 
     #wikinaut-suggestions {
@@ -181,23 +211,25 @@
     }
     .wikinaut-suggestion:last-child { border-bottom: none; }
     .wikinaut-suggestion:hover,
-    .wikinaut-suggestion:focus {
+    .wikinaut-suggestion[aria-selected="true"] {
       background: rgba(var(--wn-accent-rgb),0.14);
       color: var(--wn-accent-hot);
       outline: none;
     }
 
-    #wikinaut-input-hint {
-      min-height: 12px;
-      font-family: ${TYPE.label};
-      font-size: 9.5px;
-      letter-spacing: 0.08em;
-      line-height: 1.1;
+    /* Field hints are sentences, so they are set in the readable telemetry register (like the
+       status line and toasts), not in the letter-spaced engraved-label face. */
+    .wikinaut-hint {
+      min-height: 13px;
+      font-family: ${TYPE.mono};
+      font-size: 11px;
+      line-height: 1.2;
       color: var(--wn-signal);
       opacity: 0;
       transition: opacity 140ms ease;
     }
-    #wikinaut-input-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="info"] { color: rgba(var(--wn-dim-white-rgb),0.95); opacity: 1; }
 
     /* ── Route card — the atlas plate ────────────────────────────────────
        The signature surface: a celestial-chart plate inset into the fascia. Double
@@ -301,9 +333,9 @@
     #wikinaut-route-prev svg, #wikinaut-route-next svg { display: block; }
     #wikinaut-route-label {
       font-family: ${TYPE.label};
-      font-size: 8.5px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.16em;
       color: rgba(var(--wn-parchment-rgb),0.75);
       text-transform: uppercase;
       white-space: nowrap;
@@ -380,6 +412,18 @@
       font-size: 8.5px;
       letter-spacing: 0.2px;
     }
+    /* A page several routes pass through is ONE star — the layout is keyed on node identity,
+       so the paths converge on it. A wider halo makes that convergence read at a glance. */
+    .wikinaut-wp.shared .wikinaut-wp-node {
+      stroke: rgba(var(--wn-parchment-rgb),0.9);
+      stroke-width: 1.4;
+      filter: drop-shadow(0 0 4px rgba(var(--wn-blue-glow-rgb),0.5));
+    }
+    /* Waypoints only the OTHER routes visit: quiet unlabelled markers. */
+    .wikinaut-wp.off-route .wikinaut-wp-node {
+      stroke: rgba(var(--wn-blue-rgb),0.65);
+      stroke-width: 0.9;
+    }
     .wikinaut-wp.current .wikinaut-wp-node { stroke: var(--wn-accent); }
     #wikinaut-panel:is([data-phase="plotting"], [data-phase="course-ready"],
         [data-phase="countdown"], [data-phase="launching"], [data-phase="flying"],
@@ -408,11 +452,11 @@
     #wikinaut-freshness {
       margin-top: 5px;
       font-family: ${TYPE.label};
-      font-size: 8px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.22em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
-      color: rgba(var(--wn-parchment-rgb),0.42);
+      color: rgba(var(--wn-parchment-rgb),0.62);
     }
 
     /* ── Launch sequence (spaceport gantry + bay doors + smoke + shake) ── */
@@ -544,7 +588,10 @@
     #wikinaut-countdown[data-on="true"] { display: flex; }
 
     /* Sustained, escalating launch shake — amplitude ramps over the burn, then settles. */
-    #wikinaut-root[data-shake="true"] #wikinaut-panel { animation: wikinaut-shake 1400ms ease-in-out; }
+    /* Tempo-scaled so it covers the whole climb (beat(170) + beat(1000)) at any speed. */
+    #wikinaut-root[data-shake="true"] #wikinaut-panel {
+      animation: wikinaut-shake calc(1170ms * var(--wn-tempo, 1)) ease-in-out;
+    }
     @keyframes wikinaut-shake {
       0%   { transform: translate(-50%, 0); }
       8%   { transform: translate(calc(-50% - 1px), 0.5px); }
@@ -607,9 +654,9 @@
     .wikinaut-settings-row { display: contents; }
     .wikinaut-settings-label {
       font-family: ${TYPE.label};
-      font-size: 9px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
     }
@@ -632,6 +679,8 @@
       outline: none;
     }
     #wikinaut-backend-input:focus { border-color: rgba(var(--wn-accent-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--wn-accent-rgb),0.3); }
+    #wikinaut-backend-hint { grid-column: 2 / -1; margin-top: -6px; }
+    #wikinaut-backend-hint[data-state="idle"] { display: none; }
     #wikinaut-settings-reset { grid-column: 1 / -1; justify-self: start; }
 
     /* ── Ship ──────────────────────────────────────────────────────────── */
@@ -760,34 +809,45 @@
       width: 4px;
       height: 4px;
       transform: translate(-50%, -50%);
-      animation: wikinaut-warp-zoom ${CONFIG.jumpDurationMs}ms cubic-bezier(.55,0,.85,.5) forwards;
+      animation: wikinaut-warp-zoom calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.55,0,.85,.5) forwards;
     }
     /* Arrivals replay the departure keyframes in reverse (animation-direction) — one
        keyframe per effect instead of a hand-tuned "-in" twin for each. */
     .wikinaut-warp[data-mode="arrive"] {
-      animation: wikinaut-warp-zoom ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards;
+      animation: wikinaut-warp-zoom calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-warp-zoom { 0% { transform: translate(-50%,-50%) scale(0.6); } 100% { transform: translate(-50%,-50%) scale(1.5); } }
 
+    /* 56 of these play at once, so the streak animates a COMPOSITABLE property. Growing 'width'
+       (the old keyframe) is a layout property: 56 elements re-laid-out and repainted every
+       frame, on the main thread, at exactly the moment the arrival path is also running its
+       synchronous full-page link scan. Fixed width + scaleX is the identical picture without
+       the layout. The per-streak angle arrives as --wn-streak-angle (set by
+       Transition.renderHyperspace) so the keyframe can own the whole composed transform —
+       writing 'transform' on the element directly would be clobbered by the animation.
+       No will-change on these OR on the warp layers below: promoting them measurably HURT
+       (a repeatable ~60ms stall at the jump — 56 new layers, and the tunnel/flash are
+       tens-of-vmax mix-blend-mode elements whose textures are expensive to allocate). */
     .wikinaut-warp-streak {
       position: absolute;
       left: 0;
       top: 0;
       height: 2px;
-      width: 2px;
+      width: 150vmax;
       transform-origin: 0 50%;
+      transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002);
       border-radius: 2px;
       background: linear-gradient(90deg, #ffffff, var(--wn-accent-glow) 22%, var(--wn-accent) 44%, var(--wn-streak-a) 72%, transparent);
       box-shadow: 0 0 12px var(--wn-streak-b), 0 0 4px #ffffff;
-      animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.5,0,.85,.5) forwards;
+      animation: wikinaut-streak calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.5,0,.85,.5) forwards;
     }
     .wikinaut-warp[data-mode="arrive"] .wikinaut-warp-streak {
-      animation: wikinaut-streak ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards;
+      animation: wikinaut-streak calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse forwards;
     }
     @keyframes wikinaut-streak {
-      0%   { width: 4px; opacity: 0; }
+      0%   { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(0.0002); opacity: 0; }
       12%  { opacity: 1; }
-      100% { width: 150vmax; opacity: 0; }
+      100% { transform: rotate(var(--wn-streak-angle, 0deg)) scaleX(1); opacity: 0; }
     }
 
     .wikinaut-flash {
@@ -800,9 +860,9 @@
       border-radius: 50%;
       background: radial-gradient(circle, #ffffff 0%, #ffffff 14%, var(--wn-accent-glow) 34%, rgba(var(--wn-accent-rgb),0.5) 54%, transparent 76%);
       opacity: 0;
-      animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
+      animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-in forwards;
     }
-    .wikinaut-flash[data-mode="arrive"] { animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-out reverse forwards; }
+    .wikinaut-flash[data-mode="arrive"] { animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-out reverse forwards; }
     @keyframes wikinaut-flash {
       0%   { opacity: 0; transform: translate(-50%,-50%) scale(0); }
       70%  { opacity: 0.6; }
@@ -837,9 +897,9 @@
       mix-blend-mode: screen;
       filter: blur(1px);
       opacity: 0;
-      animation: wikinaut-warp-tunnel ${CONFIG.jumpDurationMs}ms cubic-bezier(.55,0,.85,.5) forwards;
+      animation: wikinaut-warp-tunnel calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.55,0,.85,.5) forwards;
     }
-    .wikinaut-warp-tunnel[data-mode="arrive"] { animation: wikinaut-warp-tunnel ${CONFIG.jumpDurationMs}ms cubic-bezier(.2,.7,.3,1) reverse forwards; }
+    .wikinaut-warp-tunnel[data-mode="arrive"] { animation: wikinaut-warp-tunnel calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse forwards; }
     @keyframes wikinaut-warp-tunnel {
       0%   { opacity: 0; transform: translate(-50%,-50%) scale(0.2) rotate(0deg); }
       25%  { opacity: 0.9; }
@@ -859,7 +919,7 @@
       box-shadow: 0 0 26px 6px rgba(var(--wn-accent-rgb),0.6), inset 0 0 18px rgba(255,255,255,0.7);
       filter: blur(1.5px);
       opacity: 0;
-      animation: wikinaut-warp-ring ${CONFIG.jumpDurationMs}ms cubic-bezier(.3,.7,.3,1) forwards;
+      animation: wikinaut-warp-ring calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) cubic-bezier(.3,.7,.3,1) forwards;
     }
     .wikinaut-warp-ring[data-mode="arrive"] { animation-direction: reverse; }
     @keyframes wikinaut-warp-ring {
@@ -880,9 +940,9 @@
       background: radial-gradient(circle, #ffffff 0%, #ffffff 24%, var(--wn-accent-glow) 46%, rgba(var(--wn-accent-rgb),0) 72%);
       opacity: 0;
       /* Reuses the flash bloom curve — same shape family, no dedicated keyframe. */
-      animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-in forwards;
+      animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-in forwards;
     }
-    .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-flash ${CONFIG.jumpDurationMs}ms ease-out reverse forwards; }
+    .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-out reverse forwards; }
 
     /* Degraded jump: the link couldn't be found on the live page, so the ship blinks out from
        its current position and the flight continues via a direct URL navigation. Reuses the
@@ -902,15 +962,28 @@
        dropping out of warp replays the same stretch in reverse. (The old separate camera
        shudder is gone — the flash/streaks/stretch carry the punch-through.) */
     #wikinaut-ship-shell[data-pose="warp"] .wikinaut-ship-body {
-      animation: wikinaut-warp-stretch 300ms cubic-bezier(.6,0,.9,.4) forwards;
+      animation: wikinaut-warp-stretch calc(300ms * var(--wn-tempo, 1)) cubic-bezier(.6,0,.9,.4) forwards;
     }
     #wikinaut-ship-shell[data-pose="warp-in"] .wikinaut-ship-body {
-      animation: wikinaut-warp-stretch 300ms cubic-bezier(.2,.7,.3,1) reverse both;
+      animation: wikinaut-warp-stretch calc(300ms * var(--wn-tempo, 1)) cubic-bezier(.2,.7,.3,1) reverse both;
     }
     @keyframes wikinaut-warp-stretch {
       0%   { transform: scaleX(1) scaleY(1); opacity: 1; }
       55%  { transform: scaleX(2.8) scaleY(0.62); opacity: 1; }
       100% { transform: scaleX(0.04) scaleY(0.32); opacity: 0; }
+    }
+
+    /* Boost burn: the ship stretches along its heading and snaps BACK. It is skipping up the
+       flight path, not leaving the page, so it must not reuse [data-pose="warp"] — that one
+       ends the keyframe at opacity 0 and holds there (animation-fill-mode: forwards),
+       which made the ship vanish for the rest of the hop. */
+    #wikinaut-ship-shell[data-pose="boost"] .wikinaut-ship-body {
+      animation: wikinaut-boost-stretch calc(320ms * var(--wn-tempo, 1)) cubic-bezier(.4,0,.3,1) both;
+    }
+    @keyframes wikinaut-boost-stretch {
+      0%   { transform: scaleX(1) scaleY(1); opacity: 1; }
+      45%  { transform: scaleX(2.4) scaleY(0.7); opacity: 0.85; }
+      100% { transform: scaleX(1) scaleY(1); opacity: 1; }
     }
 
     /* The console can never obstruct the ship or its target link while flying: it dims for
@@ -990,9 +1063,11 @@
 
     /* ── Toast ─────────────────────────────────────────────────────────── */
 
+    /* showToast sets 'bottom' from the console's live top edge; the right edge lines up with
+       the console's (it is min(960px, 100% - 28px) wide and centered). */
     .wikinaut-toast {
       position: fixed;
-      right: 20px;
+      right: max(14px, calc((100% - 960px) / 2));
       bottom: 120px;
       z-index: 2147483005;
       max-width: min(380px, calc(100vw - 40px));

@@ -11,14 +11,12 @@
       // so it can never block it), then charge and jump to lightspeed.
       await Transition.ensureInView(link);
 
-      let rect = link.getBoundingClientRect();
-      const anchor = Transition.anchorFromLink(link, rect);
+      const anchor = Transition.anchorFromLink(link);
       Figure.faceToward(anchor.slitX);
       Figure.pose('tug');
-      await sleep(prefersReducedMotion() ? 0 : 140);
+      await sleep(prefersReducedMotion() ? 0 : beat(140));
 
-      rect = link.getBoundingClientRect();
-      Object.assign(anchor, Transition.anchorFromLink(link, rect));
+      Object.assign(anchor, Transition.anchorFromLink(link));
       if (onJumpStart) onJumpStart();
       LinkFx.clearReticle();
 
@@ -28,20 +26,79 @@
         Transition.renderHyperspace(anchor, 'depart');
         Figure.moveTo(anchor.slitX - CONFIG.figureSize / 2, anchor.slitY - CONFIG.figureSize / 2);
         Figure.pose('warp');
-        await sleep(320); // ship stretches to a point (must outlast the 300ms warp-stretch)
+        // Ship stretches to a point; must outlast the CSS warp-stretch, which is scaled by
+        // the same --wn-tempo factor beat() applies here.
+        await sleep(beat(320));
         Figure.hide();
-        await sleep(60);
+        // …then hold for the REST of the field. Every departure keyframe above runs
+        // calc(jumpDurationMs * --wn-tempo), and this used to return after beat(320+60) —
+        // 54% in. @keyframes wikinaut-flash (which both .wikinaut-flash and
+        // .wikinaut-warp-core animate) puts its entire white-out at 100% on an ease-in
+        // curve, so the departure flash and core bloom never rendered at all and the jump
+        // read as the page simply flipping. Arrivals were given exactly this treatment
+        // already (see arrive() below); departures had been left behind.
+        // NOTE: Traversal._jumpThrough's watchdog races this total — move both together.
+        await sleep(beat(CONFIG.jumpDurationMs - 320));
       }
 
       return anchor;
     },
 
-    // The cruise already parks the link at the comfort line, so there's no scroll to do
-    // here — that second adjustment was the pre-jump jank. Just fade/disable the console
-    // (so it can never block the target) and re-lock the reticle for the jump.
+    // Fade/disable the console (so it can never block the target) and re-lock the reticle.
+    //
+    // The cruise normally parks the link at the comfort line, so there is usually no scroll to
+    // do — an UNCONDITIONAL adjustment here was the old pre-jump jank. But "usually" isn't
+    // "always": expanding a collapsed navbox at touchdown pushes the link (and everything
+    // below it) down, and a doc-edge-clamped camera can't reach a target near the very top or
+    // bottom. Those cases used to open the slit off-screen. So: scroll only when the anchor has
+    // genuinely left the safe band, and then only as far as the band.
     async ensureInView(link) {
       if (dom.panel) dom.panel.dataset.jumping = 'true';
-      LinkFx.repositionReticle(link.getBoundingClientRect());
+      await Transition.scrollAnchorIntoBand(link);
+      LinkFx.repositionReticle(anchorRect(link));
+    },
+
+    // The vertical band a jump target must sit in: clear of the masthead, clear of the console.
+    // Returns the scroll delta needed to bring `centerY` inside it (0 when it already is).
+    bandCorrection(centerY) {
+      const top = 80;
+      const bottom = Math.min(window.innerHeight - 90, panelObstacleRect().top - 24);
+      if (bottom <= top) return 0;
+      if (centerY < top) return centerY - top;
+      if (centerY > bottom) return centerY - bottom;
+      return 0;
+    },
+
+    // Ease the page (not the ship) until the link's anchor is back inside the band, keeping the
+    // ship glued to the anchor throughout so the correction reads as the camera settling rather
+    // than the ship drifting. No-op when the anchor is already in band.
+    async scrollAnchorIntoBand(link) {
+      const startScroll = window.scrollY;
+      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      const target = clamp(startScroll + Transition.bandCorrection(anchorCenter(link).y), 0, maxScroll);
+      const delta = target - startScroll;
+      if (Math.abs(delta) < 2) return;
+      if (prefersReducedMotion()) {
+        window.scrollTo(window.scrollX, target);
+      } else {
+        await animate(beat(220), (progress) => {
+          const eased = progress < 0.5
+            ? 2 * progress * progress
+            : 1 - ((1 - progress) * (1 - progress) * 2);
+          window.scrollTo(window.scrollX, startScroll + delta * eased);
+          // ONE measurement per frame, shared by the ship and the reticle. The reticle used
+          // to be repositioned only after the loop, so for the whole correction it hung at a
+          // stale viewport spot while the link slid out from under it, then snapped.
+          const rect = anchorRect(link);
+          const settled = Figure.targetAtRect(rect);
+          Figure.moveTo(settled.x, settled.y);
+          LinkFx.repositionReticle(rect);
+        });
+      }
+      const rect = anchorRect(link);
+      const settled = Figure.targetAtRect(rect);
+      Figure.moveTo(settled.x, settled.y);
+      LinkFx.repositionReticle(rect);
     },
 
     // Drop the ship out of warp at the saved entry point on a freshly loaded page, so the
@@ -49,8 +106,13 @@
     async arrive(entry) {
       JourneyPortal.activate();
       runtime.figureAngle = entry.angle || 0;
-      Figure.moveTo(entry.x, entry.y);
-      const anchor = {slitX: entry.x + CONFIG.figureSize / 2, slitY: entry.y + CONFIG.figureSize / 2};
+      // Clamp into THIS page's viewport: the entry point was recorded on the previous page,
+      // which may have been a different window size (or the jump may have happened near the
+      // bottom edge). Unclamped, the ship dropped out of warp partly or wholly off-screen.
+      const x = clamp(entry.x, 8, Math.max(8, window.innerWidth - CONFIG.figureSize - 8));
+      const y = clamp(entry.y, 8, Math.max(8, window.innerHeight - CONFIG.figureSize - 8));
+      Figure.moveTo(x, y);
+      const anchor = {slitX: x + CONFIG.figureSize / 2, slitY: y + CONFIG.figureSize / 2};
 
       if (prefersReducedMotion()) {
         Figure.show();
@@ -60,16 +122,21 @@
       Transition.renderHyperspace(anchor, 'arrive');
       Figure.show();
       Figure.pose('warp-in');
-      await sleep(CONFIG.jumpDurationMs * 0.7);
+      // The ship drops out of warp first (its own stretch is calc(300ms * tempo)), but the
+      // field must play its FULL calc(jumpDurationMs * tempo) — clearing the layer at 0.7 of
+      // that killed every arrival animation 30% in and the whole field popped out.
+      await sleep(beat(CONFIG.jumpDurationMs * 0.7));
       Figure.pose('look');
+      await sleep(beat(CONFIG.jumpDurationMs * 0.3));
       dom.ripLayer.dataset.open = 'false';
       dom.ripLayer.replaceChildren();
     },
 
-    anchorFromLink(link, rect) {
-      const slitX = rect.left + rect.width / 2;
-      const slitY = rect.top + rect.height / 2;
-      return {slitX, slitY, entryX: slitX, entryY: slitY};
+    // The jump slit sits exactly where the ship sits — Figure.targetAtRect owns that identity,
+    // so a viewport-edge clamp can never split the ship from its own hyperspace.
+    anchorFromLink(link) {
+      const {slitX, slitY} = Figure.targetAtRect(anchorRect(link));
+      return {slitX, slitY};
     },
 
     // Lightspeed field at the slit. mode 'depart' streaks fly outward; 'arrive' streaks
@@ -95,7 +162,9 @@
         const streak = document.createElement('div');
         streak.className = 'wikinaut-warp-streak';
         const angle = (360 / streakCount) * i + (Math.random() * 8 - 4);
-        streak.style.transform = `rotate(${angle}deg)`;
+        // The angle is a custom property, not a `transform` write: the streak keyframe
+        // animates transform (scaleX — see styles.js) and would clobber an inline one.
+        streak.style.setProperty('--wn-streak-angle', `${angle.toFixed(2)}deg`);
         streak.style.animationDelay = `${Math.random() * 70}ms`;
         warp.append(streak);
       }
@@ -113,12 +182,6 @@
       core.dataset.mode = mode;
 
       dom.ripLayer.append(tunnel, warp, ring, flash, core);
-
-      // A brief camera shudder as the drive punches through (departure only).
-      if (mode === 'depart' && dom.root && !prefersReducedMotion()) {
-        dom.root.dataset.warpShake = 'true';
-        window.setTimeout(() => { if (dom.root) delete dom.root.dataset.warpShake; }, 240);
-      }
     },
 
     // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by

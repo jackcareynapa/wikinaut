@@ -12,8 +12,28 @@
     figurePosition: {x: 0, y: 0},
     autocompleteTimer: 0,
     autocompleteAbortId: 0,
+    suggestions: [],     // the titles currently listed under the destination input
+    suggestionIndex: -1, // keyboard-highlighted suggestion (-1 = none)
     settingsOpen: false,
+    // Set by Traversal.abort(); cleared by the next beginWalk. animate() and the flight's
+    // checkpoints throw FlightAbandoned while it is set, so every await in the flight loop —
+    // including tweens that START after the abort, which a captured generation can't catch —
+    // unwinds before it can save, scroll, or navigate.
+    abortRequested: false,
+    // Bumped every time a flight ends (resume()'s finally). Per-frame callbacks capture it and
+    // bail when it moves, so a tween that outlives its flight — an error path tore the flight
+    // down while a cruise was mid-air — stops scrolling the document and moving the ship.
+    flightGeneration: 0,
   };
+
+  // Thrown by a frame callback whose flight has already been torn down. animate() rejects with
+  // it; Traversal.resume swallows it, because it is a clean stop and not a fault to narrate.
+  class FlightAbandoned extends Error {
+    constructor() {
+      super('Flight abandoned.');
+      this.code = 'wn/flight-abandoned';
+    }
+  }
 
   // ─── Phase machine (drives both nav-computer UI and ship) ─────────────────────
   // Single source of truth for "where are we in the flight loop". `data-phase` on the panel is
@@ -34,6 +54,7 @@
 
   const Phase = {
     set(next) {
+      const prev = runtime.phase;
       runtime.phase = next;
       if (dom.panel) {
         dom.panel.dataset.phase = next;
@@ -41,8 +62,15 @@
         // at each call site (that duplicated the phase machine's own signal).
         dom.panel.dataset.flying = next === PHASES.FLYING ? 'true' : 'false';
       }
+      syncFlightControls(prev);
     },
     is(...names) {
       return names.includes(runtime.phase);
     },
   };
+
+  // Countdown through touchdown: a flight owns the page, so the console's inputs are locked
+  // and the Launch key is the Abort key.
+  function inFlight() {
+    return Phase.is(PHASES.COUNTDOWN, PHASES.LAUNCHING, PHASES.FLYING);
+  }
