@@ -30,7 +30,15 @@
         // the same --wn-tempo factor beat() applies here.
         await sleep(beat(320));
         Figure.hide();
-        await sleep(beat(60));
+        // …then hold for the REST of the field. Every departure keyframe above runs
+        // calc(jumpDurationMs * --wn-tempo), and this used to return after beat(320+60) —
+        // 54% in. @keyframes wikinaut-flash (which both .wikinaut-flash and
+        // .wikinaut-warp-core animate) puts its entire white-out at 100% on an ease-in
+        // curve, so the departure flash and core bloom never rendered at all and the jump
+        // read as the page simply flipping. Arrivals were given exactly this treatment
+        // already (see arrive() below); departures had been left behind.
+        // NOTE: Traversal._jumpThrough's watchdog races this total — move both together.
+        await sleep(beat(CONFIG.jumpDurationMs - 320));
       }
 
       return anchor;
@@ -174,32 +182,6 @@
       core.dataset.mode = mode;
 
       dom.ripLayer.append(tunnel, warp, ring, flash, core);
-    },
-
-    // The boost flourish: the ship's own drive punching up the flight path on a hop too long
-    // to fly whole (Traversal.boostIfDistant). Deliberately the RING + CORE only — no streaks,
-    // no flash — so it reads as an in-system burn, clearly not the between-articles hyperspace
-    // jump and clearly not the amber emergency warp.
-    renderBoost(anchor) {
-      if (prefersReducedMotion()) return;
-      dom.ripLayer.replaceChildren();
-      dom.ripLayer.dataset.open = 'true';
-      dom.ripLayer.style.setProperty('--wn-slit-x', `${Math.round(anchor.slitX)}px`);
-      dom.ripLayer.style.setProperty('--wn-slit-y', `${Math.round(anchor.slitY)}px`);
-
-      const ring = document.createElement('div');
-      ring.className = 'wikinaut-warp-ring wikinaut-warp-ring-boost';
-      ring.dataset.mode = 'depart';
-      const core = document.createElement('div');
-      core.className = 'wikinaut-warp-core wikinaut-warp-core-boost';
-      core.dataset.mode = 'depart';
-      dom.ripLayer.append(ring, core);
-      window.setTimeout(() => {
-        if (dom.ripLayer?.firstChild === ring) {
-          dom.ripLayer.dataset.open = 'false';
-          dom.ripLayer.replaceChildren();
-        }
-      }, beat(CONFIG.jumpDurationMs * 0.6));   // matches the boost ring/core CSS duration
     },
 
     // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by

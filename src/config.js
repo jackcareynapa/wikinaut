@@ -30,16 +30,25 @@
     figureSize: 56,
     minCruiseDurationMs: 180,   // degenerate-hop floor only (target already under the ship)
     // The flight window: how long the ship may cruise under its own power before the hop is
-    // too long to fly whole. Beyond `speed x cruiseWindowMs` the ship BOOSTS — a brief warp
-    // flourish skips it up the flight path — and then flies the final window at exactly the
-    // slider speed. Capping the flown DISTANCE this way keeps every hop's visible approach at
-    // the same pace; the old fixed 12s duration cap did the opposite, silently compressing
-    // long hops and overriding the slider (it bit at 6600px on the default setting, which is
-    // routine on a tall article).
+    // too long to fly whole. Beyond `speed x cruiseWindowMs` (with the margin below) the ship
+    // BOOSTS — it lights its drive and skips up the flight path — and then flies the final
+    // window at exactly the slider speed. Capping the flown DISTANCE this way keeps every
+    // hop's visible approach at the same pace; the old fixed 12s duration cap did the
+    // opposite, silently compressing long hops and overriding the slider (it bit at 6600px
+    // on the default setting, which is routine on a tall article).
     cruiseWindowMs: 9000,
     minCruiseWindowPx: 1200,    // …but never boost the ship closer in than this, so even the
                                 // slowest setting gets a real approach (and its flights then
                                 // run past cruiseWindowMs — which is what 100 px/s means)
+    // How much longer than the flown window a hop must be before the ship boosts at all.
+    // The trigger and the window used to be the SAME number, so a hop one pixel over the
+    // window played the entire boost flourish in order to skip one pixel — and on a tall
+    // article that is most hops, which is why the burn read as a hyperspace jump firing
+    // seconds after Launch. A FACTOR rather than an absolute margin, so the longest
+    // un-boosted flight stays bounded at ~cruiseWindowMs x this at every slider setting.
+    boostTriggerFactor: 1.4,
+    boostBurstCount: 14,        // embers thrown off the nozzle at boost ignition
+    boostWakePx: 1500,          // visible tail of the skipped chord (the rest is off-camera)
     maxCruiseDurationMs: 60000, // runaway guard ONLY; planCruise + the window keep flights far
                                 // below it, so if this ever bites it is a bug (it warns)
     jumpDurationMs: 700,  // every warp CSS animation interpolates this, so all FX rescale together

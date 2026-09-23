@@ -59,16 +59,25 @@
     figureSize: 56,
     minCruiseDurationMs: 180,   // degenerate-hop floor only (target already under the ship)
     // The flight window: how long the ship may cruise under its own power before the hop is
-    // too long to fly whole. Beyond `speed x cruiseWindowMs` the ship BOOSTS — a brief warp
-    // flourish skips it up the flight path — and then flies the final window at exactly the
-    // slider speed. Capping the flown DISTANCE this way keeps every hop's visible approach at
-    // the same pace; the old fixed 12s duration cap did the opposite, silently compressing
-    // long hops and overriding the slider (it bit at 6600px on the default setting, which is
-    // routine on a tall article).
+    // too long to fly whole. Beyond `speed x cruiseWindowMs` (with the margin below) the ship
+    // BOOSTS — it lights its drive and skips up the flight path — and then flies the final
+    // window at exactly the slider speed. Capping the flown DISTANCE this way keeps every
+    // hop's visible approach at the same pace; the old fixed 12s duration cap did the
+    // opposite, silently compressing long hops and overriding the slider (it bit at 6600px
+    // on the default setting, which is routine on a tall article).
     cruiseWindowMs: 9000,
     minCruiseWindowPx: 1200,    // …but never boost the ship closer in than this, so even the
                                 // slowest setting gets a real approach (and its flights then
                                 // run past cruiseWindowMs — which is what 100 px/s means)
+    // How much longer than the flown window a hop must be before the ship boosts at all.
+    // The trigger and the window used to be the SAME number, so a hop one pixel over the
+    // window played the entire boost flourish in order to skip one pixel — and on a tall
+    // article that is most hops, which is why the burn read as a hyperspace jump firing
+    // seconds after Launch. A FACTOR rather than an absolute margin, so the longest
+    // un-boosted flight stays bounded at ~cruiseWindowMs x this at every slider setting.
+    boostTriggerFactor: 1.4,
+    boostBurstCount: 14,        // embers thrown off the nozzle at boost ignition
+    boostWakePx: 1500,          // visible tail of the skipped chord (the rest is off-camera)
     maxCruiseDurationMs: 60000, // runaway guard ONLY; planCruise + the window keep flights far
                                 // below it, so if this ever bites it is a bug (it warns)
     jumpDurationMs: 700,  // every warp CSS animation interpolates this, so all FX rescale together
@@ -1080,21 +1089,6 @@
       animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-in forwards;
     }
     .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-out reverse forwards; }
-
-    /* Boost burn: the ship skipping up the flight path on a hop too long to fly whole
-       (Traversal.boostIfDistant). A tighter, dimmer ring and a small core — an in-system burn,
-       not the full between-articles hyperspace jump. */
-    .wikinaut-warp-ring-boost {
-      border-width: 2px;
-      border-color: rgba(var(--wn-accent-rgb),0.75);
-      box-shadow: 0 0 18px 3px rgba(var(--wn-accent-rgb),0.4), inset 0 0 10px rgba(255,255,255,0.45);
-      animation-duration: calc(${CONFIG.jumpDurationMs}ms * 0.6 * var(--wn-tempo, 1));
-    }
-    .wikinaut-warp-core-boost {
-      width: 4vmax;
-      height: 4vmax;
-      animation-duration: calc(${CONFIG.jumpDurationMs}ms * 0.6 * var(--wn-tempo, 1));
-    }
 
     /* Degraded jump: the link couldn't be found on the live page, so the ship blinks out from
        its current position and the flight continues via a direct URL navigation. Reuses the
@@ -2628,8 +2622,7 @@
     Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
 
-    // Warm the alias cache for the first hop through the countdown, so th
-    // e origin page's
+    // Warm the alias cache for the first hop through the countdown, so the origin page's
     // own link scan never waits on the network even when the title needs a redirect alias.
     const firstHop = route[currentIndex + 1];
     if (firstHop) Routing.fetchRedirectAliases(firstHop).catch(() => {});
@@ -3458,11 +3451,13 @@
       let anchor;
       try {
         // beat()-scaled, because everything it races is: tearThrough runs
-        // beat(220)+beat(140)+beat(320)+beat(60) = 740 x tempo, and tempo reaches 1.8 at the
-        // slowest speed setting. A fixed 1300ms guard lost that race (1332ms) and clicked
+        // beat(220) + beat(140) + beat(jumpDurationMs) = 1060 x tempo, and tempo reaches 1.8
+        // at the slowest speed setting. A fixed 1300ms guard lost that race and clicked
         // through while the ship was still mid-warp-stretch — the jump cutting its own
-        // animation off. This stays a real watchdog; it just always sits BEYOND the FX.
-        const watchdogMs = beat(CONFIG.jumpDurationMs + 600);
+        // animation off. This stays a real watchdog; it just always sits BEYOND the FX, at
+        // ~1.9x its cost. The trailing hold in tearThrough is sized off jumpDurationMs too,
+        // so the two move together: if that grows, so does this.
+        const watchdogMs = beat(CONFIG.jumpDurationMs * 2 + 600);
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -3677,9 +3672,19 @@
     // default 550 px/s (routine on a tall article) and at 1200px on the slowest setting, so
     // long hops flew arbitrarily faster than short ones and the slider stopped mattering.
     //
-    // Cap the flown DISTANCE instead. The ship boosts — a brief warp flourish, then it skips
-    // up the flight path — and flies the final window under its own power at exactly the
-    // slider speed. Every hop's visible approach is the same pace, whatever the distance.
+    // Cap the flown DISTANCE instead. The ship boosts — it lights its drive and skips up the
+    // flight path — and flies the final window under its own power at exactly the slider
+    // speed. Every hop's visible approach is the same pace, whatever the distance.
+    //
+    // TWO things this must not be, both of them player-reported:
+    //  - It must not LOOK like the hyperspace jump. The boost used to render a ring + core
+    //    into dom.ripLayer — the jump layer, with the jump's own elements — so a burn that
+    //    happens seconds after Launch read as the ship jumping pages early. The boost is the
+    //    ship's own drive, so it is drawn with the ship's own wash (pose + Trail) and never
+    //    touches the jump layer, which now belongs solely to departures and emergency warps.
+    //  - It must not fire to skip nothing. The trigger and the flown window used to be the
+    //    SAME number, so a 5000px hop played the whole flourish to skip 50px — 1% of the
+    //    path — and on a tall article that is most hops. boostTriggerFactor is the margin.
     async boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow) {
       const half = CONFIG.figureSize / 2;
       const windowPx =
@@ -3690,24 +3695,52 @@
       };
       const end = targetDoc();
       const span = Math.hypot(end.x - start.x, end.y - start.y);
-      if (span <= windowPx) return;
+      if (span <= windowPx * CONFIG.boostTriggerFactor) return;
 
       const skip = 1 - windowPx / span;
       const boostTo = {x: lerp(start.x, end.x, skip), y: lerp(start.y, end.y, skip)};
 
+      // Ignition: the ship stretches along its heading (data-pose="boost") and throws a
+      // shower of embers off the nozzle — the same vocabulary as liftoff and touchdown, so
+      // it reads as the drive burning rather than as a hole torn in space.
       Figure.pose('boost');
-      Transition.renderBoost({
-        slitX: runtime.figurePosition.x + half,
-        slitY: runtime.figurePosition.y + half,
-      });
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half, CONFIG.boostBurstCount);
       await sleep(beat(200));
 
       window.scrollTo(window.scrollX, clamp(boostTo.y + half - restLineY, 0, maxScrollNow()));
       Figure.headToward(boostTo.x, boostTo.y, end.x, end.y);
       Figure.moveTo(boostTo.x - window.scrollX, boostTo.y - window.scrollY);
-      Trail.clearRibbon();   // don't streak the skipped span
+      // Lay a burn streak into the new position instead of erasing the wake outright. Only
+      // the TAIL of the skipped chord is seeded: the span can be tens of thousands of pixels
+      // and all but the last screenful of it is off-camera once the scroll lands.
+      Trail.clearRibbon();
+      Traversal._seedBoostWake(start, boostTo);
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half,
+        Math.round(CONFIG.boostBurstCount / 2));
       Figure.pose('walking');
       await sleep(beat(120));
+    },
+
+    // The visible tail of a boost: trail points along the last CONFIG.boostWakePx of the
+    // skipped chord, in document coords (Trail flies in document space, so the wake streams
+    // past with the page exactly as a flown one would). Sampled by distance rather than by
+    // frame, because none of this happened over frames.
+    _seedBoostWake(from, to) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const chord = Math.hypot(dx, dy);
+      if (chord < 1) return;
+      const tail = Math.min(chord, CONFIG.boostWakePx);
+      const steps = 10;
+      const now = performance.now();
+      const half = CONFIG.figureSize / 2;
+      for (let i = 0; i <= steps; i += 1) {
+        const along = chord - tail + (tail * i) / steps;
+        const t = along / chord;
+        Trail.addPointDoc(from.x + dx * t + half, from.y + dy * t + half, now);
+      }
     },
 
     // Set the ship down exactly on the link. Re-measures the anchor fragment and, if the page
@@ -4146,7 +4179,15 @@
         // the same --wn-tempo factor beat() applies here.
         await sleep(beat(320));
         Figure.hide();
-        await sleep(beat(60));
+        // …then hold for the REST of the field. Every departure keyframe above runs
+        // calc(jumpDurationMs * --wn-tempo), and this used to return after beat(320+60) —
+        // 54% in. @keyframes wikinaut-flash (which both .wikinaut-flash and
+        // .wikinaut-warp-core animate) puts its entire white-out at 100% on an ease-in
+        // curve, so the departure flash and core bloom never rendered at all and the jump
+        // read as the page simply flipping. Arrivals were given exactly this treatment
+        // already (see arrive() below); departures had been left behind.
+        // NOTE: Traversal._jumpThrough's watchdog races this total — move both together.
+        await sleep(beat(CONFIG.jumpDurationMs - 320));
       }
 
       return anchor;
@@ -4290,32 +4331,6 @@
       core.dataset.mode = mode;
 
       dom.ripLayer.append(tunnel, warp, ring, flash, core);
-    },
-
-    // The boost flourish: the ship's own drive punching up the flight path on a hop too long
-    // to fly whole (Traversal.boostIfDistant). Deliberately the RING + CORE only — no streaks,
-    // no flash — so it reads as an in-system burn, clearly not the between-articles hyperspace
-    // jump and clearly not the amber emergency warp.
-    renderBoost(anchor) {
-      if (prefersReducedMotion()) return;
-      dom.ripLayer.replaceChildren();
-      dom.ripLayer.dataset.open = 'true';
-      dom.ripLayer.style.setProperty('--wn-slit-x', `${Math.round(anchor.slitX)}px`);
-      dom.ripLayer.style.setProperty('--wn-slit-y', `${Math.round(anchor.slitY)}px`);
-
-      const ring = document.createElement('div');
-      ring.className = 'wikinaut-warp-ring wikinaut-warp-ring-boost';
-      ring.dataset.mode = 'depart';
-      const core = document.createElement('div');
-      core.className = 'wikinaut-warp-core wikinaut-warp-core-boost';
-      core.dataset.mode = 'depart';
-      dom.ripLayer.append(ring, core);
-      window.setTimeout(() => {
-        if (dom.ripLayer?.firstChild === ring) {
-          dom.ripLayer.dataset.open = 'false';
-          dom.ripLayer.replaceChildren();
-        }
-      }, beat(CONFIG.jumpDurationMs * 0.6));   // matches the boost ring/core CSS duration
     },
 
     // A shorter, amber-tinted warp for the degraded "couldn't find the link, jumping by

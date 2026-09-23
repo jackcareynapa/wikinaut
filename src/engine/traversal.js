@@ -175,11 +175,13 @@
       let anchor;
       try {
         // beat()-scaled, because everything it races is: tearThrough runs
-        // beat(220)+beat(140)+beat(320)+beat(60) = 740 x tempo, and tempo reaches 1.8 at the
-        // slowest speed setting. A fixed 1300ms guard lost that race (1332ms) and clicked
+        // beat(220) + beat(140) + beat(jumpDurationMs) = 1060 x tempo, and tempo reaches 1.8
+        // at the slowest speed setting. A fixed 1300ms guard lost that race and clicked
         // through while the ship was still mid-warp-stretch — the jump cutting its own
-        // animation off. This stays a real watchdog; it just always sits BEYOND the FX.
-        const watchdogMs = beat(CONFIG.jumpDurationMs + 600);
+        // animation off. This stays a real watchdog; it just always sits BEYOND the FX, at
+        // ~1.9x its cost. The trailing hold in tearThrough is sized off jumpDurationMs too,
+        // so the two move together: if that grows, so does this.
+        const watchdogMs = beat(CONFIG.jumpDurationMs * 2 + 600);
         anchor = await Promise.race([
           Transition.tearThrough({link, onJumpStart: () => setStatus(`Jumping to ${nextTitle}…`)}),
           sleep(watchdogMs).then(() => null),
@@ -394,9 +396,19 @@
     // default 550 px/s (routine on a tall article) and at 1200px on the slowest setting, so
     // long hops flew arbitrarily faster than short ones and the slider stopped mattering.
     //
-    // Cap the flown DISTANCE instead. The ship boosts — a brief warp flourish, then it skips
-    // up the flight path — and flies the final window under its own power at exactly the
-    // slider speed. Every hop's visible approach is the same pace, whatever the distance.
+    // Cap the flown DISTANCE instead. The ship boosts — it lights its drive and skips up the
+    // flight path — and flies the final window under its own power at exactly the slider
+    // speed. Every hop's visible approach is the same pace, whatever the distance.
+    //
+    // TWO things this must not be, both of them player-reported:
+    //  - It must not LOOK like the hyperspace jump. The boost used to render a ring + core
+    //    into dom.ripLayer — the jump layer, with the jump's own elements — so a burn that
+    //    happens seconds after Launch read as the ship jumping pages early. The boost is the
+    //    ship's own drive, so it is drawn with the ship's own wash (pose + Trail) and never
+    //    touches the jump layer, which now belongs solely to departures and emergency warps.
+    //  - It must not fire to skip nothing. The trigger and the flown window used to be the
+    //    SAME number, so a 5000px hop played the whole flourish to skip 50px — 1% of the
+    //    path — and on a tall article that is most hops. boostTriggerFactor is the margin.
     async boostIfDistant(link, speed, restLineY, targetDoc, maxScrollNow) {
       const half = CONFIG.figureSize / 2;
       const windowPx =
@@ -407,24 +419,52 @@
       };
       const end = targetDoc();
       const span = Math.hypot(end.x - start.x, end.y - start.y);
-      if (span <= windowPx) return;
+      if (span <= windowPx * CONFIG.boostTriggerFactor) return;
 
       const skip = 1 - windowPx / span;
       const boostTo = {x: lerp(start.x, end.x, skip), y: lerp(start.y, end.y, skip)};
 
+      // Ignition: the ship stretches along its heading (data-pose="boost") and throws a
+      // shower of embers off the nozzle — the same vocabulary as liftoff and touchdown, so
+      // it reads as the drive burning rather than as a hole torn in space.
       Figure.pose('boost');
-      Transition.renderBoost({
-        slitX: runtime.figurePosition.x + half,
-        slitY: runtime.figurePosition.y + half,
-      });
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half, CONFIG.boostBurstCount);
       await sleep(beat(200));
 
       window.scrollTo(window.scrollX, clamp(boostTo.y + half - restLineY, 0, maxScrollNow()));
       Figure.headToward(boostTo.x, boostTo.y, end.x, end.y);
       Figure.moveTo(boostTo.x - window.scrollX, boostTo.y - window.scrollY);
-      Trail.clearRibbon();   // don't streak the skipped span
+      // Lay a burn streak into the new position instead of erasing the wake outright. Only
+      // the TAIL of the skipped chord is seeded: the span can be tens of thousands of pixels
+      // and all but the last screenful of it is off-camera once the scroll lands.
+      Trail.clearRibbon();
+      Traversal._seedBoostWake(start, boostTo);
+      Trail.burst(
+        runtime.figurePosition.x + half, runtime.figurePosition.y + half,
+        Math.round(CONFIG.boostBurstCount / 2));
       Figure.pose('walking');
       await sleep(beat(120));
+    },
+
+    // The visible tail of a boost: trail points along the last CONFIG.boostWakePx of the
+    // skipped chord, in document coords (Trail flies in document space, so the wake streams
+    // past with the page exactly as a flown one would). Sampled by distance rather than by
+    // frame, because none of this happened over frames.
+    _seedBoostWake(from, to) {
+      const dx = to.x - from.x;
+      const dy = to.y - from.y;
+      const chord = Math.hypot(dx, dy);
+      if (chord < 1) return;
+      const tail = Math.min(chord, CONFIG.boostWakePx);
+      const steps = 10;
+      const now = performance.now();
+      const half = CONFIG.figureSize / 2;
+      for (let i = 0; i <= steps; i += 1) {
+        const along = chord - tail + (tail * i) / steps;
+        const t = along / chord;
+        Trail.addPointDoc(from.x + dx * t + half, from.y + dy * t + half, now);
+      }
     },
 
     // Set the ship down exactly on the link. Re-measures the anchor fragment and, if the page

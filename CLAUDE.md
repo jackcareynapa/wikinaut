@@ -199,6 +199,20 @@ names, exactly as when it was one file. Consequences worth knowing:
   `CONFIG.cruiseWindowMs` window at the slider speed. `CONFIG.maxCruiseDurationMs` is now only a
   runaway guard that warns; do not reintroduce a duration cap as a pacing knob — it silently
   overrides the player's slider, which is exactly the bug this replaced.
+- **The boost is the ship's drive, not a jump — keep it off the jump layer.** `boostIfDistant`
+  originally drew a ring + core into `dom.ripLayer` using the hyperspace jump's own elements, so
+  players read a mid-flight burn as the ship jumping pages seconds after Launch. It is now drawn
+  with the ship's own vocabulary only (`data-pose="boost"` plus `Trail.burst` / a seeded
+  `Trail.addPointDoc` wake); `dom.ripLayer` belongs solely to `tearThrough` and
+  `renderEmergencyWarp`. It also needs a real margin before it fires: the trigger and the flown
+  window used to be the same number, so a hop one pixel over the window played the whole
+  flourish to skip one pixel. `CONFIG.boostTriggerFactor` is that margin.
+- **A jump's JS holds must outlast its CSS.** Every warp keyframe runs
+  `calc(CONFIG.jumpDurationMs * var(--wn-tempo))`, and `@keyframes wikinaut-flash` (both
+  `.wikinaut-flash` and `.wikinaut-warp-core`) puts its whole white-out at `100%` on an `ease-in`
+  curve — so returning early doesn't shorten the effect, it deletes it. `tearThrough` and
+  `arrive` each hold the full `beat(CONFIG.jumpDurationMs)`. `Traversal._jumpThrough`'s watchdog
+  races `tearThrough` and is sized off the same constant: change one, change both.
 - **The speed setting is the flight's tempo, not just the cruise.** `Settings.tempo()` scales
   every fixed cinematic hold through `beat()` (touchdown, departure, warp-in, launch countdown)
   and the warp CSS through `--wn-tempo`. ~1.5s of fixed holds run per page; unscaled they swamp

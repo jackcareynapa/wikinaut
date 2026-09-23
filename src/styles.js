@@ -913,21 +913,6 @@
     }
     .wikinaut-warp-core[data-mode="arrive"] { animation: wikinaut-flash calc(${CONFIG.jumpDurationMs}ms * var(--wn-tempo, 1)) ease-out reverse forwards; }
 
-    /* Boost burn: the ship skipping up the flight path on a hop too long to fly whole
-       (Traversal.boostIfDistant). A tighter, dimmer ring and a small core — an in-system burn,
-       not the full between-articles hyperspace jump. */
-    .wikinaut-warp-ring-boost {
-      border-width: 2px;
-      border-color: rgba(var(--wn-accent-rgb),0.75);
-      box-shadow: 0 0 18px 3px rgba(var(--wn-accent-rgb),0.4), inset 0 0 10px rgba(255,255,255,0.45);
-      animation-duration: calc(${CONFIG.jumpDurationMs}ms * 0.6 * var(--wn-tempo, 1));
-    }
-    .wikinaut-warp-core-boost {
-      width: 4vmax;
-      height: 4vmax;
-      animation-duration: calc(${CONFIG.jumpDurationMs}ms * 0.6 * var(--wn-tempo, 1));
-    }
-
     /* Degraded jump: the link couldn't be found on the live page, so the ship blinks out from
        its current position and the flight continues via a direct URL navigation. Reuses the
        flash/ring shapes but amber, with no chromatic split — visually distinct from a real
