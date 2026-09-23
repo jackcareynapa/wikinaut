@@ -195,18 +195,23 @@ names, exactly as when it was one file. Consequences worth knowing:
   the hop duration *from* the ramps, so the trapezoid's peak velocity is exactly the slider's
   px/s on every hop; deriving it the other way round (duration = distance/speed, then wall-clock
   ramp fractions) made short hops cruise 1.6x nominal and long ones 1.11x. Hops too long to fly
-  whole BOOST (`Traversal.boostIfDistant`) up the flight path and then fly the final
+  whole BOOST: `planHop` burns continuously up the SAME curve (a cubic Hermite in time, zero
+  velocity at ignition, exactly the slider speed at the handoff) and then flies the final
   `CONFIG.cruiseWindowMs` window at the slider speed. `CONFIG.maxCruiseDurationMs` is now only a
   runaway guard that warns; do not reintroduce a duration cap as a pacing knob — it silently
   overrides the player's slider, which is exactly the bug this replaced.
-- **The boost is the ship's drive, not a jump — keep it off the jump layer.** `boostIfDistant`
+- **The boost must never skip.** It used to scroll the page and move the ship straight to the
+  window's start in ONE frame — 35,000-43,000px on a tall article — which players reported as
+  the ship glitching and teleporting (and it dumped a whole screen of lazy-loaded content on the
+  next frame). Any pacing change must keep the ship's document position continuous frame to
+  frame; `planHop` stays monotonic only while the burn is at least `v * boostMs / 3`, which the
+  trigger margin guarantees.
+- **The boost is the ship's drive, not a jump — keep it off the jump layer.** The boost
   originally drew a ring + core into `dom.ripLayer` using the hyperspace jump's own elements, so
-  players read a mid-flight burn as the ship jumping pages seconds after Launch. It is now drawn
-  with the ship's own vocabulary only (`data-pose="boost"` plus `Trail.burst` / a seeded
-  `Trail.addPointDoc` wake); `dom.ripLayer` belongs solely to `tearThrough` and
-  `renderEmergencyWarp`. It also needs a real margin before it fires: the trigger and the flown
-  window used to be the same number, so a hop one pixel over the window played the whole
-  flourish to skip one pixel. `CONFIG.boostTriggerFactor` is that margin.
+  players read a mid-flight burn as the ship jumping pages seconds after Launch. It is drawn
+  with the ship's own vocabulary only (`data-pose="boost"`, its long torch, `Trail.burst` at
+  ignition); `dom.ripLayer` belongs solely to `tearThrough` and `renderEmergencyWarp`. It also
+  needs a real margin before it fires: `CONFIG.boostTriggerFactor`.
 - **A jump's JS holds must outlast its CSS.** Every warp keyframe runs
   `calc(CONFIG.jumpDurationMs * var(--wn-tempo))`, and `@keyframes wikinaut-flash` (both
   `.wikinaut-flash` and `.wikinaut-warp-core`) puts its whole white-out at `100%` on an `ease-in`
