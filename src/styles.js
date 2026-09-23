@@ -82,7 +82,7 @@
       font-family: ${TYPE.label};
       font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.2em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
       text-shadow: 0 1px 0 rgba(0,0,0,0.7);
@@ -152,6 +152,33 @@
       box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.5);
     }
 
+    /* One keyboard focus ring for every console control (the destination input keeps its own
+       inset treatment above). Browser defaults varied by control and vanished on the fascia. */
+    .wikinaut-button:focus-visible,
+    .wikinaut-range:focus-visible,
+    .wikinaut-color-input:focus-visible,
+    #wikinaut-backend-input:focus-visible {
+      outline: 2px solid var(--wn-accent-glow);
+      outline-offset: 2px;
+    }
+
+    /* In flight the Launch key is the Abort key: the quiet secondary cap with a signal-red
+       hairline, since stopping a flight is the one destructive action on the console. */
+    #wikinaut-begin-button[data-mode="abort"] {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.55),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+    #wikinaut-begin-button[data-mode="abort"]:hover:not(:disabled) {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.9),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+
     /* ── Autocomplete ──────────────────────────────────────────────────── */
 
     #wikinaut-suggestions {
@@ -184,23 +211,25 @@
     }
     .wikinaut-suggestion:last-child { border-bottom: none; }
     .wikinaut-suggestion:hover,
-    .wikinaut-suggestion:focus {
+    .wikinaut-suggestion[aria-selected="true"] {
       background: rgba(var(--wn-accent-rgb),0.14);
       color: var(--wn-accent-hot);
       outline: none;
     }
 
-    #wikinaut-input-hint {
-      min-height: 12px;
-      font-family: ${TYPE.label};
-      font-size: 9.5px;
-      letter-spacing: 0.08em;
-      line-height: 1.1;
+    /* Field hints are sentences, so they are set in the readable telemetry register (like the
+       status line and toasts), not in the letter-spaced engraved-label face. */
+    .wikinaut-hint {
+      min-height: 13px;
+      font-family: ${TYPE.mono};
+      font-size: 11px;
+      line-height: 1.2;
       color: var(--wn-signal);
       opacity: 0;
       transition: opacity 140ms ease;
     }
-    #wikinaut-input-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="info"] { color: rgba(var(--wn-dim-white-rgb),0.95); opacity: 1; }
 
     /* ── Route card — the atlas plate ────────────────────────────────────
        The signature surface: a celestial-chart plate inset into the fascia. Double
@@ -304,9 +333,9 @@
     #wikinaut-route-prev svg, #wikinaut-route-next svg { display: block; }
     #wikinaut-route-label {
       font-family: ${TYPE.label};
-      font-size: 8.5px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.16em;
       color: rgba(var(--wn-parchment-rgb),0.75);
       text-transform: uppercase;
       white-space: nowrap;
@@ -423,11 +452,11 @@
     #wikinaut-freshness {
       margin-top: 5px;
       font-family: ${TYPE.label};
-      font-size: 8px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.22em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
-      color: rgba(var(--wn-parchment-rgb),0.42);
+      color: rgba(var(--wn-parchment-rgb),0.62);
     }
 
     /* ── Launch sequence (spaceport gantry + bay doors + smoke + shake) ── */
@@ -625,9 +654,9 @@
     .wikinaut-settings-row { display: contents; }
     .wikinaut-settings-label {
       font-family: ${TYPE.label};
-      font-size: 9px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
     }
@@ -650,6 +679,8 @@
       outline: none;
     }
     #wikinaut-backend-input:focus { border-color: rgba(var(--wn-accent-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--wn-accent-rgb),0.3); }
+    #wikinaut-backend-hint { grid-column: 2 / -1; margin-top: -6px; }
+    #wikinaut-backend-hint[data-state="idle"] { display: none; }
     #wikinaut-settings-reset { grid-column: 1 / -1; justify-self: start; }
 
     /* ── Ship ──────────────────────────────────────────────────────────── */
@@ -1032,9 +1063,11 @@
 
     /* ── Toast ─────────────────────────────────────────────────────────── */
 
+    /* showToast sets 'bottom' from the console's live top edge; the right edge lines up with
+       the console's (it is min(960px, 100% - 28px) wide and centered). */
     .wikinaut-toast {
       position: fixed;
-      right: 20px;
+      right: max(14px, calc((100% - 960px) / 2));
       bottom: 120px;
       z-index: 2147483005;
       max-width: min(380px, calc(100vw - 40px));

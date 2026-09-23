@@ -259,7 +259,7 @@
       font-family: ${TYPE.label};
       font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.2em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
       text-shadow: 0 1px 0 rgba(0,0,0,0.7);
@@ -329,6 +329,33 @@
       box-shadow: inset 0 2px 5px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(var(--wn-accent-rgb),0.5);
     }
 
+    /* One keyboard focus ring for every console control (the destination input keeps its own
+       inset treatment above). Browser defaults varied by control and vanished on the fascia. */
+    .wikinaut-button:focus-visible,
+    .wikinaut-range:focus-visible,
+    .wikinaut-color-input:focus-visible,
+    #wikinaut-backend-input:focus-visible {
+      outline: 2px solid var(--wn-accent-glow);
+      outline-offset: 2px;
+    }
+
+    /* In flight the Launch key is the Abort key: the quiet secondary cap with a signal-red
+       hairline, since stopping a flight is the one destructive action on the console. */
+    #wikinaut-begin-button[data-mode="abort"] {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.55),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+    #wikinaut-begin-button[data-mode="abort"]:hover:not(:disabled) {
+      color: var(--wn-signal);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 0 0 1px rgba(var(--wn-signal-rgb),0.9),
+        0 2px 4px rgba(0,0,0,0.45);
+    }
+
     /* ── Autocomplete ──────────────────────────────────────────────────── */
 
     #wikinaut-suggestions {
@@ -361,23 +388,25 @@
     }
     .wikinaut-suggestion:last-child { border-bottom: none; }
     .wikinaut-suggestion:hover,
-    .wikinaut-suggestion:focus {
+    .wikinaut-suggestion[aria-selected="true"] {
       background: rgba(var(--wn-accent-rgb),0.14);
       color: var(--wn-accent-hot);
       outline: none;
     }
 
-    #wikinaut-input-hint {
-      min-height: 12px;
-      font-family: ${TYPE.label};
-      font-size: 9.5px;
-      letter-spacing: 0.08em;
-      line-height: 1.1;
+    /* Field hints are sentences, so they are set in the readable telemetry register (like the
+       status line and toasts), not in the letter-spaced engraved-label face. */
+    .wikinaut-hint {
+      min-height: 13px;
+      font-family: ${TYPE.mono};
+      font-size: 11px;
+      line-height: 1.2;
       color: var(--wn-signal);
       opacity: 0;
       transition: opacity 140ms ease;
     }
-    #wikinaut-input-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="warn"] { opacity: 0.95; }
+    .wikinaut-hint[data-state="info"] { color: rgba(var(--wn-dim-white-rgb),0.95); opacity: 1; }
 
     /* ── Route card — the atlas plate ────────────────────────────────────
        The signature surface: a celestial-chart plate inset into the fascia. Double
@@ -481,9 +510,9 @@
     #wikinaut-route-prev svg, #wikinaut-route-next svg { display: block; }
     #wikinaut-route-label {
       font-family: ${TYPE.label};
-      font-size: 8.5px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.14em;
+      letter-spacing: 0.16em;
       color: rgba(var(--wn-parchment-rgb),0.75);
       text-transform: uppercase;
       white-space: nowrap;
@@ -600,11 +629,11 @@
     #wikinaut-freshness {
       margin-top: 5px;
       font-family: ${TYPE.label};
-      font-size: 8px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.22em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
-      color: rgba(var(--wn-parchment-rgb),0.42);
+      color: rgba(var(--wn-parchment-rgb),0.62);
     }
 
     /* ── Launch sequence (spaceport gantry + bay doors + smoke + shake) ── */
@@ -802,9 +831,9 @@
     .wikinaut-settings-row { display: contents; }
     .wikinaut-settings-label {
       font-family: ${TYPE.label};
-      font-size: 9px;
+      font-size: 9.5px;
       font-weight: 600;
-      letter-spacing: 0.18em;
+      letter-spacing: 0.16em;
       text-transform: uppercase;
       color: rgba(var(--wn-parchment-rgb),0.72);
     }
@@ -827,6 +856,8 @@
       outline: none;
     }
     #wikinaut-backend-input:focus { border-color: rgba(var(--wn-accent-rgb),0.65); box-shadow: 0 0 0 1px rgba(var(--wn-accent-rgb),0.3); }
+    #wikinaut-backend-hint { grid-column: 2 / -1; margin-top: -6px; }
+    #wikinaut-backend-hint[data-state="idle"] { display: none; }
     #wikinaut-settings-reset { grid-column: 1 / -1; justify-self: start; }
 
     /* ── Ship ──────────────────────────────────────────────────────────── */
@@ -1209,9 +1240,11 @@
 
     /* ── Toast ─────────────────────────────────────────────────────────── */
 
+    /* showToast sets 'bottom' from the console's live top edge; the right edge lines up with
+       the console's (it is min(960px, 100% - 28px) wide and centered). */
     .wikinaut-toast {
       position: fixed;
-      right: 20px;
+      right: max(14px, calc((100% - 960px) / 2));
       bottom: 120px;
       z-index: 2147483005;
       max-width: min(380px, calc(100vw - 40px));
@@ -1284,7 +1317,14 @@
     figurePosition: {x: 0, y: 0},
     autocompleteTimer: 0,
     autocompleteAbortId: 0,
+    suggestions: [],     // the titles currently listed under the destination input
+    suggestionIndex: -1, // keyboard-highlighted suggestion (-1 = none)
     settingsOpen: false,
+    // Set by Traversal.abort(); cleared by the next beginWalk. animate() and the flight's
+    // checkpoints throw FlightAbandoned while it is set, so every await in the flight loop —
+    // including tweens that START after the abort, which a captured generation can't catch —
+    // unwinds before it can save, scroll, or navigate.
+    abortRequested: false,
     // Bumped every time a flight ends (resume()'s finally). Per-frame callbacks capture it and
     // bail when it moves, so a tween that outlives its flight — an error path tore the flight
     // down while a cruise was mid-air — stops scrolling the document and moving the ship.
@@ -1319,6 +1359,7 @@
 
   const Phase = {
     set(next) {
+      const prev = runtime.phase;
       runtime.phase = next;
       if (dom.panel) {
         dom.panel.dataset.phase = next;
@@ -1326,11 +1367,18 @@
         // at each call site (that duplicated the phase machine's own signal).
         dom.panel.dataset.flying = next === PHASES.FLYING ? 'true' : 'false';
       }
+      syncFlightControls(prev);
     },
     is(...names) {
       return names.includes(runtime.phase);
     },
   };
+
+  // Countdown through touchdown: a flight owns the page, so the console's inputs are locked
+  // and the Launch key is the Abort key.
+  function inFlight() {
+    return Phase.is(PHASES.COUNTDOWN, PHASES.LAUNCHING, PHASES.FLYING);
+  }
 
   // ─── Backend URL (default + self-host override via GM storage) ────────────────
 
@@ -1875,15 +1923,19 @@
         </div>
         <div class="wikinaut-field">
           <label class="wikinaut-label" for="wikinaut-target-input">Set coordinates</label>
-          <input id="wikinaut-target-input" type="text" autocomplete="off" placeholder="Destination article — Philosophy, Cat, Moon…" />
+          <input id="wikinaut-target-input" type="text" autocomplete="off"
+            role="combobox" aria-autocomplete="list" aria-expanded="false"
+            aria-controls="wikinaut-suggestions" aria-describedby="wikinaut-input-hint"
+            placeholder="Destination article — Philosophy, Cat, Moon…" />
           <div id="wikinaut-suggestions" role="listbox" aria-label="Wikipedia article suggestions"></div>
-          <div id="wikinaut-input-hint" data-state="idle" aria-live="polite"></div>
+          <div id="wikinaut-input-hint" class="wikinaut-hint" data-state="idle" aria-live="polite"></div>
         </div>
         <button id="wikinaut-chart-button" class="wikinaut-button" type="button" disabled>Chart Course</button>
         <button id="wikinaut-begin-button" class="wikinaut-button secondary" type="button" disabled>Launch</button>
-        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.5 1.5M11.2 11.2l1.5 1.5M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5"></path></svg></button>
-        <div id="wikinaut-route-card" aria-live="polite">
-          <div id="wikinaut-status">Set a destination and chart a course through Wikipedia.</div>
+        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings"
+          aria-label="Console settings" aria-controls="wikinaut-settings-section" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.5 1.5M11.2 11.2l1.5 1.5M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5"></path></svg></button>
+        <div id="wikinaut-route-card">
+          <div id="wikinaut-status" role="status">${IDLE_STATUS}</div>
           <div id="wikinaut-route-pager" hidden>
             <button id="wikinaut-route-prev" class="wikinaut-button secondary icon" type="button"
               title="Previous route" aria-label="Previous route"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 3 5l3.5 3.5"></path></svg></button>
@@ -1893,12 +1945,14 @@
           </div>
           <div id="wikinaut-starmap"></div>
           <div id="wikinaut-freshness"></div>
-          <div id="wikinaut-countdown" data-on="false" aria-live="assertive"></div>
+          <div id="wikinaut-countdown" data-on="false" aria-hidden="true"></div>
         </div>
-        <div id="wikinaut-settings-section" hidden aria-label="Console settings">
+        <div id="wikinaut-settings-section" hidden role="group" aria-label="Console settings">
           <div class="wikinaut-settings-row">
             <label class="wikinaut-settings-label" for="wikinaut-backend-input">Backend URL</label>
-            <input type="text" id="wikinaut-backend-input" autocomplete="off" spellcheck="false" />
+            <input type="text" id="wikinaut-backend-input" autocomplete="off" spellcheck="false"
+              aria-describedby="wikinaut-backend-hint" />
+            <div id="wikinaut-backend-hint" class="wikinaut-hint" data-state="idle" aria-live="polite"></div>
           </div>
           <div class="wikinaut-settings-row">
             <label class="wikinaut-settings-label" for="wikinaut-speed-slider">Flight speed</label>
@@ -1909,7 +1963,7 @@
             <label class="wikinaut-settings-label" for="wikinaut-ship-color">Color</label>
             <input type="color" id="wikinaut-ship-color" class="wikinaut-color-input" />
           </div>
-          <button id="wikinaut-settings-reset" class="wikinaut-button secondary" type="button">Reset</button>
+          <button id="wikinaut-settings-reset" class="wikinaut-button secondary" type="button">Reset speed &amp; color</button>
         </div>
       </section>
     `;
@@ -1941,13 +1995,39 @@
       speedValue: root.querySelector('#wikinaut-speed-value'),
       travelerColorInput: root.querySelector('#wikinaut-ship-color'),
       settingsReset: root.querySelector('#wikinaut-settings-reset'),
+      backendHint: root.querySelector('#wikinaut-backend-hint'),
     });
+  }
+
+  // The console is fixed over the bottom of the article, so without this the last
+  // panel-height of every page (the footer, the bottom navboxes) could never be scrolled
+  // clear of it. An inert spacer at the end of <body>, tracking the console's height,
+  // gives the page that much more scroll room. It sits below all article content, so
+  // nothing above it moves.
+  function reserveScrollRoom() {
+    if (!dom.panel || typeof ResizeObserver !== 'function') return;
+    const spacer = document.createElement('div');
+    spacer.id = 'wikinaut-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    document.body.append(spacer);
+    const bottomGap = 16 + 8;   // the console's bottom offset, plus a little air
+    new ResizeObserver(() => {
+      spacer.style.height = `${Math.ceil(dom.panel.offsetHeight + bottomGap)}px`;
+      positionToast();
+    }).observe(dom.panel);
   }
 
   function closeSettings() {
     runtime.settingsOpen = false;
     dom.settingsSection.hidden = true;
     dom.settingsButton.setAttribute('aria-expanded', 'false');
+  }
+
+  // Settings feedback lands beside the field it is about, not on the course status line
+  // (where it overwrote "Course locked…"). 'warn' is the signal color; 'info' is quiet.
+  function setBackendHint(text, state) {
+    dom.backendHint.textContent = text;
+    dom.backendHint.dataset.state = state;
   }
 
   function bindEvents() {
@@ -1958,17 +2038,36 @@
       requestText(`${Backend.url}/ok`).catch(() => {});
     }, {once: true});
     dom.input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (suggestionsOpen()) {
+          event.preventDefault();
+          moveSuggestion(event.key === 'ArrowDown' ? 1 : -1);
+        }
+        return;
+      }
       if (event.key === 'Enter') {
         event.preventDefault();
+        if (commitSuggestionFromKeyboard()) return;
         chartCourse();
       }
       if (event.key === 'Escape') closeSuggestions();
     });
 
     dom.chartButton.addEventListener('click', chartCourse);
-    dom.beginButton.addEventListener('click', beginWalk);
+    dom.beginButton.addEventListener('click', onBeginButton);
     dom.routePrev.addEventListener('click', () => cycleRoute(-1));
     dom.routeNext.addEventListener('click', () => cycleRoute(1));
+
+    // Escape closes the settings drawer from anywhere in it (or on its button), and hands
+    // focus back to the button so a keyboard user isn't dropped at the top of the page.
+    dom.panel.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !runtime.settingsOpen) return;
+      const inSettings =
+        dom.settingsSection.contains(event.target) || event.target === dom.settingsButton;
+      if (!inSettings) return;
+      closeSettings();
+      dom.settingsButton.focus();
+    });
 
     document.addEventListener('click', (event) => {
       if (!dom.suggestions.contains(event.target) && event.target !== dom.input) {
@@ -1995,12 +2094,10 @@
         // Put the still-active backend back in the field so the box never shows a value
         // that isn't in effect.
         dom.backendInput.value = Backend.override;
-        setStatus('Backend URL must be an https:// address (or http:// on localhost).',
-          {isError: true});
+        setBackendHint('Must be an https:// address (or http:// on localhost).', 'warn');
         return;
       }
-      const where = Backend.override ? Backend.url : `default (${CONFIG.apiBaseUrl})`;
-      setStatus(`Backend set to ${where}.`);
+      setBackendHint(Backend.override ? `Using ${Backend.url}.` : 'Using the default backend.', 'info');
     });
 
     dom.speedSlider.addEventListener('input', () => {
@@ -2035,6 +2132,9 @@
 
   // ─── UI helpers ─────────────────────────────────────────────────────────────
 
+  // The status line at rest: first load, and again whenever a charted course is dropped.
+  const IDLE_STATUS = 'Set a destination and chart a course through Wikipedia.';
+
   function setBusy(isBusy, message) {
     dom.input.disabled = isBusy;
     dom.chartButton.disabled = isBusy;
@@ -2058,15 +2158,36 @@
       days < 10 ? `Star chart: ${label}` : `Star chart: ${label} (~${Math.ceil(days / 30)}mo old)`;
   }
 
+  // One toast at a time, parked just above the console. It used to sit at a fixed
+  // bottom:120px, which is inside the console once a chart is open, so it covered the star
+  // chart and the settings drawer, and repeated toasts stacked exactly on top of each other.
   function showToast(message, ms = 4600) {
+    dom.root.querySelectorAll('.wikinaut-toast').forEach((el) => el.remove());
     const toast = document.createElement('div');
     toast.className = 'wikinaut-toast';
+    toast.setAttribute('role', 'status');
     toast.textContent = message;
     dom.root.append(toast);
+    positionToast();
     window.setTimeout(() => toast.remove(), ms);
   }
 
+  // Also re-run whenever the console resizes (reserveScrollRoom's observer), so a live toast
+  // rides up with it when the chart or the settings drawer opens beneath it.
+  function positionToast() {
+    const toast = dom.root?.querySelector('.wikinaut-toast');
+    if (!toast) return;
+    const panelTop = dom.panel ? dom.panel.getBoundingClientRect().top : window.innerHeight - 120;
+    toast.style.bottom = `${Math.max(16, Math.round(window.innerHeight - panelTop + 10))}px`;
+  }
+
   // ─── Autocomplete ───────────────────────────────────────────────────────────
+  // The destination input is an ARIA combobox: the suggestions are non-focusable options and
+  // the keyboard drives them from the input (ArrowUp/Down highlights via
+  // aria-activedescendant, Enter picks). They used to be buttons that committed on mousedown
+  // only, so a keyboard user who Tabbed to one and pressed Enter fired a click nothing
+  // listened for — and since Chart Course is gated on a pick, the game was unplayable
+  // without a mouse.
 
   // Query → suggestion list for this page's lifetime. Retyping/backspacing replays earlier
   // queries constantly; a hit renders instantly and skips both the debounce and the API call.
@@ -2074,13 +2195,10 @@
   const AUTOCOMPLETE_CACHE_MAX = 80;
 
   function onDestinationInput() {
+    if (inFlight()) return;
     // Editing abandons any locked destination and charted course (strict gating).
     runtime.selectedPage = null;
-    runtime.route = null;
-    runtime.routes = null;
-    runtime.routeIndex = 0;
-    dom.beginButton.disabled = true;
-    updateRouteCycle();
+    invalidateCourse();
     updateChartGate();
     clearTimeout(runtime.autocompleteTimer);
 
@@ -2095,13 +2213,32 @@
       // Invalidate any in-flight fetch for an older query so its late response can't
       // overwrite these fresher (cached) suggestions.
       runtime.autocompleteAbortId += 1;
-      renderSuggestions(cached);
+      renderSuggestions(cached, query);
       return;
     }
 
     runtime.autocompleteTimer = window.setTimeout(() => {
       fetchSuggestions(query);
     }, CONFIG.autocompleteDebounceMs);
+  }
+
+  // Drop the charted course when the destination changes. The chart, status, and saved state
+  // are cleared together: the console used to keep saying "Course locked… Ready to launch"
+  // beside a disabled Launch key, and a reload resurrected the abandoned course. A no-op once
+  // nothing is charted, so it is cheap on every keystroke.
+  function invalidateCourse() {
+    const hadCourse =
+      Boolean(runtime.route) || Phase.is(PHASES.COURSE_READY, PHASES.STALLED, PHASES.ARRIVED);
+    runtime.route = null;
+    runtime.routes = null;
+    runtime.routeIndex = 0;
+    dom.beginButton.disabled = true;
+    updateRouteCycle();
+    if (!hadCourse) return;
+    Storage.clear();
+    renderRoute([]);
+    setStatus(IDLE_STATUS);
+    Phase.set(PHASES.IDLE);
   }
 
   // Chart Course is enabled only when the destination came from OpenSearch — i.e. the
@@ -2114,13 +2251,9 @@
   function updateChartGate() {
     const valid = chartGateValid();
     const text = dom.input.value.trim();
-    if (dom.chartButton) dom.chartButton.disabled = !valid;
-    if (dom.inputHint) {
-      dom.inputHint.textContent = valid || !text
-        ? ''
-        : 'Pick a destination from the suggestions to lock coordinates.';
-      dom.inputHint.dataset.state = valid ? 'ok' : text ? 'warn' : 'idle';
-    }
+    if (dom.chartButton) dom.chartButton.disabled = !valid || inFlight();
+    if (valid || !text) setInputHint('', valid ? 'ok' : 'idle');
+    else setInputHint('Pick a destination from the suggestions to lock coordinates.', 'warn');
     // Editing away a valid pick drops a pending destination/course back to IDLE;
     // locking a pick from rest advances to DESTINATION_SET. In-flight and
     // already-charted (COURSE_READY) states are left untouched while still valid.
@@ -2129,6 +2262,14 @@
     } else if (valid && Phase.is(PHASES.IDLE)) {
       Phase.set(PHASES.DESTINATION_SET);
     }
+  }
+
+  // The line under the destination input. 'warn' shows it in the signal color; 'idle'/'ok'
+  // hide it.
+  function setInputHint(text, state) {
+    if (!dom.inputHint) return;
+    dom.inputHint.textContent = text;
+    dom.inputHint.dataset.state = state;
   }
 
   async function fetchSuggestions(query) {
@@ -2140,54 +2281,103 @@
         autocompleteCache.delete(autocompleteCache.keys().next().value);
       }
       if (requestId !== runtime.autocompleteAbortId) return;
-      renderSuggestions(results);
+      renderSuggestions(results, query);
     } catch (err) {
       if (requestId === runtime.autocompleteAbortId) {
         console.warn('[Wikinaut] autocomplete failed', err);
         closeSuggestions();
+        setInputHint("Couldn't load suggestions. Check your connection.", 'warn');
       }
     }
   }
 
-  function renderSuggestions(results) {
+  function renderSuggestions(results, query = '') {
     dom.suggestions.replaceChildren();
+    runtime.suggestions = results;
     if (!results.length) {
       closeSuggestions();
+      // Otherwise the hint keeps asking for a pick from a list that isn't there.
+      setInputHint(`No Wikipedia article matches “${query}”.`, 'warn');
       return;
     }
 
-    for (const title of results) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'wikinaut-suggestion';
-      button.textContent = title;
-      button.addEventListener('mousedown', (event) => {
+    results.forEach((title, i) => {
+      const option = document.createElement('div');
+      option.id = `wikinaut-suggestion-${i}`;
+      option.className = 'wikinaut-suggestion';
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', 'false');
+      option.textContent = title;
+      option.addEventListener('mousedown', (event) => {
         event.preventDefault();          // commit before the input blurs; no focus/blur race
-        dom.input.value = title;
-        runtime.selectedPage = title;    // a real OpenSearch pick — unlocks Chart Course
-        // A fresh destination invalidates any previously charted route.
-        runtime.route = null;
-        runtime.routes = null;
-        runtime.routeIndex = 0;
-        updateRouteCycle();
-        dom.beginButton.disabled = true;
-        if (Phase.is(PHASES.COURSE_READY)) Phase.set(PHASES.DESTINATION_SET);
-        closeSuggestions();
-        updateChartGate();
-        dom.input.focus();
+        pickSuggestion(title);
       });
-      dom.suggestions.append(button);
-    }
+      dom.suggestions.append(option);
+    });
+    runtime.suggestionIndex = -1;
     dom.suggestions.dataset.open = 'true';
+    dom.input.setAttribute('aria-expanded', 'true');
+    dom.input.removeAttribute('aria-activedescendant');
+  }
+
+  // Lock a real OpenSearch title as the destination — this is what unlocks Chart Course.
+  function pickSuggestion(title) {
+    dom.input.value = title;
+    invalidateCourse();                  // a fresh destination invalidates any charted route
+    runtime.selectedPage = title;
+    closeSuggestions();
+    updateChartGate();
+    dom.input.focus();
+  }
+
+  function suggestionsOpen() {
+    return dom.suggestions.dataset.open === 'true';
+  }
+
+  // ArrowDown/ArrowUp through the open list, wrapping; the highlight is announced through
+  // aria-activedescendant while focus stays in the input.
+  function moveSuggestion(delta) {
+    const options = [...dom.suggestions.children];
+    if (!options.length) return;
+    const n = options.length;
+    const from = runtime.suggestionIndex;
+    runtime.suggestionIndex = from === -1 ? (delta > 0 ? 0 : n - 1) : (from + delta + n) % n;
+    options.forEach((el, i) => {
+      el.setAttribute('aria-selected', String(i === runtime.suggestionIndex));
+    });
+    dom.input.setAttribute('aria-activedescendant', options[runtime.suggestionIndex].id);
+  }
+
+  // Enter in the input. A highlighted suggestion is picked (and nothing else happens, so the
+  // player sees the lock before charting). Typing an exact listed title is as good as picking
+  // it. Returns true when the key was consumed by a pick without a chart.
+  function commitSuggestionFromKeyboard() {
+    if (suggestionsOpen() && runtime.suggestionIndex >= 0) {
+      const title = runtime.suggestions[runtime.suggestionIndex];
+      if (title) {
+        pickSuggestion(title);
+        return true;
+      }
+    }
+    if (!chartGateValid()) {
+      const text = dom.input.value.trim();
+      const exact = runtime.suggestions.find((title) => Titles.same(title, text));
+      if (exact) pickSuggestion(exact);
+    }
+    return false;
   }
 
   function closeSuggestions() {
     dom.suggestions.dataset.open = 'false';
+    runtime.suggestionIndex = -1;
+    dom.input.setAttribute('aria-expanded', 'false');
+    dom.input.removeAttribute('aria-activedescendant');
   }
 
   // ─── Core flow ──────────────────────────────────────────────────────────────
 
   async function chartCourse() {
+    if (inFlight()) return;
     const targetTitle = dom.input.value.trim();
     const sourceTitle = Titles.currentPageTitle();
 
@@ -2209,7 +2399,9 @@
     Phase.set(PHASES.PLOTTING);
     setBusy(true, `Plotting a course: ${sourceTitle} → ${targetTitle}…`);
     closeSuggestions();
-    dom.routeStrip.replaceChildren();
+    // Collapse the previous chart rather than emptying it in place, which left a blank
+    // well open for the whole plotting wait.
+    renderRoute([]);
     dom.beginButton.disabled = true;
 
     try {
@@ -2244,7 +2436,35 @@
     }
   }
 
-  // The non-selected charted routes, for the star map's dim underlay fan.
+  // Phase.set calls this on every transition. In flight the destination input is read-only,
+  // Chart is off, and the Launch key is the Abort key; leaving flight restores Launch and
+  // DISABLES it by default. Every exit path that should leave it usable (a stall's retry, an
+  // abort's resume) re-enables it right after its own Phase.set, so none can inherit a live
+  // key by accident.
+  function syncFlightControls(prevPhase) {
+    if (!dom.beginButton) return;
+    const flying = inFlight();
+    const wasFlying = [PHASES.COUNTDOWN, PHASES.LAUNCHING, PHASES.FLYING].includes(prevPhase);
+    if (flying === wasFlying) return;
+    dom.input.readOnly = flying;
+    dom.chartButton.disabled = flying || !chartGateValid();
+    dom.beginButton.textContent = flying ? 'Abort' : 'Launch';
+    dom.beginButton.dataset.mode = flying ? 'abort' : 'launch';
+    if (flying) {
+      closeSuggestions();
+      dom.beginButton.setAttribute('aria-label', 'Abort flight');
+    } else {
+      dom.beginButton.removeAttribute('aria-label');
+    }
+    dom.beginButton.disabled = !flying;
+  }
+
+  // The Launch key's one handler: it is Abort for as long as a flight owns the page.
+  function onBeginButton() {
+    if (inFlight()) Traversal.abort();
+    else beginWalk();
+  }
+
   // The non-selected routes, each tagged with its STABLE lane (= index in runtime.routes) so
   // the star chart draws every route on the same lane no matter which one is selected.
   function alternateRoutes() {
@@ -2259,7 +2479,10 @@
   function updateRouteCycle() {
     if (!dom.routePager) return;
     const n = runtime.routes?.length || 0;
-    dom.routePager.hidden = n < 2;
+    // Only from the course's origin page: after a stall or an abort partway along, the
+    // console is course-ready again, but the other routes needn't pass through this page.
+    const midCourse = Titles.indexInRoute(runtime.route || [], Titles.currentPageTitle()) > 0;
+    dom.routePager.hidden = n < 2 || midCourse;
     if (n >= 2) dom.routeLabel.textContent = `Route ${runtime.routeIndex + 1}/${n}`;
   }
 
@@ -2363,8 +2586,14 @@
         })
         .join('');
 
+      // The chart is a picture of the route, so its accessible name IS the route.
+      const hops = n - 1;
+      const summary = hops < 1
+        ? `Course: ${route[0]}`
+        : `Course, ${hops} ${hops === 1 ? 'jump' : 'jumps'}: ${route.join(' → ')}`;
+
       host.innerHTML =
-        `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
+        `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeXml(summary)}">` +
         `${StarMap.graticule()}${StarMap.stars(seed)}${StarMap.alternatesMarkup(alternates, pos)}` +
         `<path id="wikinaut-route-track" d="${d}"></path>` +
         `<path id="wikinaut-route-path" d="${d}"></path>${nodes}</svg>`;
@@ -2619,6 +2848,7 @@
       return;
     }
 
+    runtime.abortRequested = false;
     Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
 
@@ -2631,14 +2861,32 @@
     // page. resume() then continues the flight; the first hop skips the dock-exit because
     // the ship is already airborne off the panel top. LaunchSequence is pure FX — this
     // function (the engine side) owns the phase transitions and status narration.
+    // Each step is followed by a checkpoint: Abort is live from the first beat of the
+    // countdown, and an aborted launch must not carry on into the next step.
     const reduce = prefersReducedMotion();
-    Phase.set(PHASES.COUNTDOWN);
-    await LaunchSequence.arm(reduce);
-    await LaunchSequence.countdown(reduce, (n) => setStatus(`Launch in ${n}…`));
-    await LaunchSequence.spoolUp(reduce);
-    Phase.set(PHASES.LAUNCHING);
-    setStatus('Launch!');
-    await LaunchSequence.liftoff(reduce);
+    try {
+      Phase.set(PHASES.COUNTDOWN);
+      await LaunchSequence.arm(reduce);
+      Traversal.checkpoint();
+      await LaunchSequence.countdown(reduce, (n) => {
+        if (runtime.abortRequested) return false;
+        setStatus(`Launch in ${n}…`);
+        return true;
+      });
+      Traversal.checkpoint();
+      await LaunchSequence.spoolUp(reduce);
+      Traversal.checkpoint();
+      Phase.set(PHASES.LAUNCHING);
+      setStatus('Launch!');
+      await LaunchSequence.liftoff(reduce);
+      Traversal.checkpoint();
+    } catch (error) {
+      if (error instanceof FlightAbandoned) {
+        Traversal.settleAbort();
+        return;
+      }
+      throw error;
+    }
 
     await Traversal.resume();
   }
@@ -3165,10 +3413,11 @@
       await sleep(beat(140));
     },
 
-    // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it.
+    // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it; the
+    // countdown is sleep-paced (no tween to reject), so onTick returning false cuts it short.
     async countdown(reduce, onTick) {
       for (const n of [3, 2, 1]) {
-        if (onTick) onTick(n);
+        if (onTick && onTick(n) === false) break;
         LaunchSequence.showDigit(String(n), reduce);
         await sleep(reduce ? beat(140) : beat(760));
       }
@@ -3341,6 +3590,7 @@
 
         if (arrivePromise) {
           await arrivePromise;
+          Traversal.checkpoint();
           // Consume the entry once used.
           Storage.saveRoute(state.route, {active: true, currentIndex});
         }
@@ -3351,6 +3601,7 @@
         }
 
         const {link, aliases, candidateCount} = await scanPromise;
+        Traversal.checkpoint();
 
         if (!link) {
           // The DOM scan still couldn't surface the link (a redirect alias the title text
@@ -3383,13 +3634,19 @@
         // airborne off the pad; on later pages it has just dropped out of warp at the
         // entry position (Transition arrival) — either way, no dock to leave.
         await Traversal.cruiseToLink(link);
+        Traversal.checkpoint();
         setStatus(`Target acquired: ${nextTitle}. Charging jump drive.`);
         await Traversal.walkToLink(link);
+        Traversal.checkpoint();
 
         await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
-        // A superseded flight is a clean stop, not a fault — don't narrate it at the player.
-        if (error instanceof FlightAbandoned) return;
+        // A superseded or aborted flight is a clean stop, not a fault — don't narrate it at
+        // the player. An abort still owes its final sweep, now that the loop has unwound.
+        if (error instanceof FlightAbandoned) {
+          if (runtime.abortRequested) Traversal.settleAbort();
+          return;
+        }
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
@@ -3466,6 +3723,10 @@
         console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
         anchor = null;
       }
+      // The departure FX take ~1s, and the player may abort inside them (tearThrough then
+      // rejects into the catch above, which would otherwise jump anyway). Last exit before
+      // the advanced route is saved and the link is clicked.
+      Traversal.checkpoint();
       if (!anchor) {
         anchor = Transition.anchorFromLink(link);
       }
@@ -3796,6 +4057,8 @@
         await sleep(prefersReducedMotion() ? 0 : beat(300));
       }
 
+      // An abort during the flourish has already re-saved the route as inactive; don't leave.
+      Traversal.checkpoint();
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
     },
 
@@ -3813,7 +4076,10 @@
     async arrive(route) {
       Storage.clear();
       renderRoute(route, route.length - 1, -1, alternateRoutes(), runtime.routeIndex);
-      setStatus(`Arrived at ${route[route.length - 1]}. Course complete.`);
+      const hops = route.length - 1;
+      setStatus(
+        `Arrived at ${route[route.length - 1]} in ${hops} ${hops === 1 ? 'jump' : 'jumps'}. ` +
+          'Set a new destination to fly again.');
       Phase.set(PHASES.ARRIVED);
       // Victory flourish where the ship dropped out of warp, then it departs (fades out) —
       // the ship only exists for the duration of a flight.
@@ -3829,6 +4095,73 @@
       Figure.hide();
       Trail.clear();
       Phase.set(PHASES.IDLE);
+      // The destination is reached: clear it so the console reads as ready for the next
+      // voyage rather than offering to chart the course just flown (focus is left alone).
+      // Only if it still names this destination: the player may already be typing the next.
+      if (Titles.same(dom.input.value.trim(), route[route.length - 1])) {
+        dom.input.value = '';
+        runtime.selectedPage = null;
+      }
+      updateChartGate();
+    },
+
+    // ─── Abort ──────────────────────────────────────────────────────────────────
+    // The Launch key becomes Abort for the whole flight (syncFlightControls). Aborting keeps
+    // the course: the route is re-saved INACTIVE at the current page, so Launch resumes the
+    // voyage from here. The player gets immediate feedback (ship gone, status, phase); the
+    // flight loop itself unwinds at its next checkpoint or tween frame and then calls
+    // settleAbort for a final sweep of anything it drew on the way out.
+    abort() {
+      if (!inFlight() || runtime.abortRequested) return;
+      const route = runtime.route || Storage.load()?.route;
+      const here = Array.isArray(route)
+        ? Titles.indexInRoute(route, Titles.currentPageTitle())
+        : -1;
+      // Already on the destination page: the arrival is playing, let it finish.
+      if (Array.isArray(route) && here >= route.length - 1) return;
+
+      runtime.abortRequested = true;
+      if (here !== -1) Storage.saveRoute(route, {active: false, currentIndex: here});
+      else Storage.clear();
+      Traversal._clearFlightFx();
+      Phase.set(here !== -1 ? PHASES.COURSE_READY : PHASES.IDLE);
+      // Held disabled until the flight loop has unwound (settleAbort), so a quick re-Launch
+      // can't start a second flight while the first is still between awaits.
+      dom.beginButton.disabled = true;
+      setStatus(here !== -1
+        ? 'Flight aborted. Course held; press Launch to resume from here.'
+        : 'Flight aborted.');
+    },
+
+    // Throw out of the flight loop once the player has aborted. Placed after every await that
+    // is not a tween (tweens reject on their own, in animate) and before every save-and-navigate.
+    checkpoint() {
+      if (runtime.abortRequested) throw new FlightAbandoned();
+    },
+
+    // Called by the flight's owner (beginWalk or resume) once an aborted flight has unwound.
+    settleAbort() {
+      Traversal._clearFlightFx();
+      dom.beginButton.disabled = !Phase.is(PHASES.COURSE_READY);
+    },
+
+    // Idempotent: returns every flight layer to its resting state.
+    _clearFlightFx() {
+      LinkFx.clearReticle();
+      LaunchSequence.hideDigit();
+      Figure.hide();
+      Trail.clear();
+      if (dom.ripLayer) {
+        dom.ripLayer.dataset.open = 'false';
+        dom.ripLayer.replaceChildren();
+      }
+      if (dom.panel) {
+        delete dom.panel.dataset.launch;
+        delete dom.panel.dataset.jumping;
+      }
+      if (dom.figure) delete dom.figure.dataset.thrust;
+      if (dom.root) delete dom.root.dataset.shake;
+      JourneyPortal.deactivate();
     },
   };
 
@@ -4505,7 +4838,8 @@
   // ─── Animation helpers ───────────────────────────────────────────────────────
 
   // Tween driver on the shared FxLoop: concurrent animations (a cruise + the trail canvas)
-  // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
+  // ride one rAF chain instead of racing separate ones. Every caller is part of a flight, so
+  // the tween rejects with FlightAbandoned once the player aborts. A throwing onFrame REJECTS the
   // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
   // await would strand forever and the engine's error handling (stall + retry) never engage.
   //
@@ -4522,6 +4856,9 @@
       FxLoop.add(function tick(now) {
         let progress;
         try {
+          // An aborted flight stops driving the page on the very next frame, whichever tween
+          // is live — cruise, launch climb, or the pre-jump camera settle.
+          if (runtime.abortRequested) throw new FlightAbandoned();
           if (start === null) start = now;
           progress = clamp((now - start) / duration, 0, 1);
           onFrame(progress, now);
@@ -4866,6 +5203,7 @@
     Settings.load();
     injectStyles();
     createRoot();
+    reserveScrollRoom();
     Phase.set(PHASES.IDLE);
     bindEvents();
     Trail.init();

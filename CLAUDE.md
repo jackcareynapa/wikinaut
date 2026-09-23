@@ -213,6 +213,14 @@ names, exactly as when it was one file. Consequences worth knowing:
   curve — so returning early doesn't shorten the effect, it deletes it. `tearThrough` and
   `arrive` each hold the full `beat(CONFIG.jumpDurationMs)`. `Traversal._jumpThrough`'s watchdog
   races `tearThrough` and is sized off the same constant: change one, change both.
+- **Every flight is abortable, so every new await in it needs an exit.** In flight
+  (`inFlight()`: countdown, launching, flying) the input is read-only, Chart is off, and the
+  Launch key is **Abort** (`syncFlightControls`, driven by `Phase.set`). `Traversal.abort()` sets
+  `runtime.abortRequested`; `animate()` then rejects every tween with `FlightAbandoned`, and
+  `Traversal.checkpoint()` covers the non-tween awaits. Any await you add to `beginWalk` or
+  `Traversal.resume` must be followed by a `checkpoint()`, and so must anything that saves an
+  advanced route and navigates (`_jumpThrough` before `link.click()`, `jumpByUrl` before
+  `location.assign`). Otherwise an abort during that await still jumps pages.
 - **The speed setting is the flight's tempo, not just the cruise.** `Settings.tempo()` scales
   every fixed cinematic hold through `beat()` (touchdown, departure, warp-in, launch countdown)
   and the warp CSS through `--wn-tempo`. ~1.5s of fixed holds run per page; unscaled they swamp

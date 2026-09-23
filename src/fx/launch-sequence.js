@@ -41,10 +41,11 @@
       await sleep(beat(140));
     },
 
-    // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it.
+    // 3 … 2 … 1 … . Calls onTick(n) before each digit so the caller can narrate it; the
+    // countdown is sleep-paced (no tween to reject), so onTick returning false cuts it short.
     async countdown(reduce, onTick) {
       for (const n of [3, 2, 1]) {
-        if (onTick) onTick(n);
+        if (onTick && onTick(n) === false) break;
         LaunchSequence.showDigit(String(n), reduce);
         await sleep(reduce ? beat(140) : beat(760));
       }

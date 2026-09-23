@@ -1,7 +1,8 @@
   // ─── Animation helpers ───────────────────────────────────────────────────────
 
   // Tween driver on the shared FxLoop: concurrent animations (a cruise + the trail canvas)
-  // ride one rAF chain instead of racing separate ones. A throwing onFrame REJECTS the
+  // ride one rAF chain instead of racing separate ones. Every caller is part of a flight, so
+  // the tween rejects with FlightAbandoned once the player aborts. A throwing onFrame REJECTS the
   // promise — if it merely unsubscribed (FxLoop's default for a bad subscriber), the caller's
   // await would strand forever and the engine's error handling (stall + retry) never engage.
   //
@@ -18,6 +19,9 @@
       FxLoop.add(function tick(now) {
         let progress;
         try {
+          // An aborted flight stops driving the page on the very next frame, whichever tween
+          // is live — cruise, launch climb, or the pre-jump camera settle.
+          if (runtime.abortRequested) throw new FlightAbandoned();
           if (start === null) start = now;
           progress = clamp((now - start) / duration, 0, 1);
           onFrame(progress, now);

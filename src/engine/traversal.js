@@ -65,6 +65,7 @@
 
         if (arrivePromise) {
           await arrivePromise;
+          Traversal.checkpoint();
           // Consume the entry once used.
           Storage.saveRoute(state.route, {active: true, currentIndex});
         }
@@ -75,6 +76,7 @@
         }
 
         const {link, aliases, candidateCount} = await scanPromise;
+        Traversal.checkpoint();
 
         if (!link) {
           // The DOM scan still couldn't surface the link (a redirect alias the title text
@@ -107,13 +109,19 @@
         // airborne off the pad; on later pages it has just dropped out of warp at the
         // entry position (Transition arrival) — either way, no dock to leave.
         await Traversal.cruiseToLink(link);
+        Traversal.checkpoint();
         setStatus(`Target acquired: ${nextTitle}. Charging jump drive.`);
         await Traversal.walkToLink(link);
+        Traversal.checkpoint();
 
         await Traversal._jumpThrough(link, nextTitle, currentIndex, state.route);
       } catch (error) {
-        // A superseded flight is a clean stop, not a fault — don't narrate it at the player.
-        if (error instanceof FlightAbandoned) return;
+        // A superseded or aborted flight is a clean stop, not a fault — don't narrate it at
+        // the player. An abort still owes its final sweep, now that the loop has unwound.
+        if (error instanceof FlightAbandoned) {
+          if (runtime.abortRequested) Traversal.settleAbort();
+          return;
+        }
         console.error('[Wikinaut]', error.code || 'wn/unknown', error);
         setStatus(error.message || 'The ship hit unexpected turbulence. Try again.', {isError: true});
         showToast('Something went sideways. You can try again or chart a new course.');
@@ -190,6 +198,10 @@
         console.warn('[Wikinaut] wn/transition-failed, jumping anyway', transitionError);
         anchor = null;
       }
+      // The departure FX take ~1s, and the player may abort inside them (tearThrough then
+      // rejects into the catch above, which would otherwise jump anyway). Last exit before
+      // the advanced route is saved and the link is clicked.
+      Traversal.checkpoint();
       if (!anchor) {
         anchor = Transition.anchorFromLink(link);
       }
@@ -520,6 +532,8 @@
         await sleep(prefersReducedMotion() ? 0 : beat(300));
       }
 
+      // An abort during the flourish has already re-saved the route as inactive; don't leave.
+      Traversal.checkpoint();
       location.assign(`/wiki/${Titles.toUrlTitle(nextTitle)}`);
     },
 
@@ -537,7 +551,10 @@
     async arrive(route) {
       Storage.clear();
       renderRoute(route, route.length - 1, -1, alternateRoutes(), runtime.routeIndex);
-      setStatus(`Arrived at ${route[route.length - 1]}. Course complete.`);
+      const hops = route.length - 1;
+      setStatus(
+        `Arrived at ${route[route.length - 1]} in ${hops} ${hops === 1 ? 'jump' : 'jumps'}. ` +
+          'Set a new destination to fly again.');
       Phase.set(PHASES.ARRIVED);
       // Victory flourish where the ship dropped out of warp, then it departs (fades out) —
       // the ship only exists for the duration of a flight.
@@ -553,5 +570,72 @@
       Figure.hide();
       Trail.clear();
       Phase.set(PHASES.IDLE);
+      // The destination is reached: clear it so the console reads as ready for the next
+      // voyage rather than offering to chart the course just flown (focus is left alone).
+      // Only if it still names this destination: the player may already be typing the next.
+      if (Titles.same(dom.input.value.trim(), route[route.length - 1])) {
+        dom.input.value = '';
+        runtime.selectedPage = null;
+      }
+      updateChartGate();
+    },
+
+    // ─── Abort ──────────────────────────────────────────────────────────────────
+    // The Launch key becomes Abort for the whole flight (syncFlightControls). Aborting keeps
+    // the course: the route is re-saved INACTIVE at the current page, so Launch resumes the
+    // voyage from here. The player gets immediate feedback (ship gone, status, phase); the
+    // flight loop itself unwinds at its next checkpoint or tween frame and then calls
+    // settleAbort for a final sweep of anything it drew on the way out.
+    abort() {
+      if (!inFlight() || runtime.abortRequested) return;
+      const route = runtime.route || Storage.load()?.route;
+      const here = Array.isArray(route)
+        ? Titles.indexInRoute(route, Titles.currentPageTitle())
+        : -1;
+      // Already on the destination page: the arrival is playing, let it finish.
+      if (Array.isArray(route) && here >= route.length - 1) return;
+
+      runtime.abortRequested = true;
+      if (here !== -1) Storage.saveRoute(route, {active: false, currentIndex: here});
+      else Storage.clear();
+      Traversal._clearFlightFx();
+      Phase.set(here !== -1 ? PHASES.COURSE_READY : PHASES.IDLE);
+      // Held disabled until the flight loop has unwound (settleAbort), so a quick re-Launch
+      // can't start a second flight while the first is still between awaits.
+      dom.beginButton.disabled = true;
+      setStatus(here !== -1
+        ? 'Flight aborted. Course held; press Launch to resume from here.'
+        : 'Flight aborted.');
+    },
+
+    // Throw out of the flight loop once the player has aborted. Placed after every await that
+    // is not a tween (tweens reject on their own, in animate) and before every save-and-navigate.
+    checkpoint() {
+      if (runtime.abortRequested) throw new FlightAbandoned();
+    },
+
+    // Called by the flight's owner (beginWalk or resume) once an aborted flight has unwound.
+    settleAbort() {
+      Traversal._clearFlightFx();
+      dom.beginButton.disabled = !Phase.is(PHASES.COURSE_READY);
+    },
+
+    // Idempotent: returns every flight layer to its resting state.
+    _clearFlightFx() {
+      LinkFx.clearReticle();
+      LaunchSequence.hideDigit();
+      Figure.hide();
+      Trail.clear();
+      if (dom.ripLayer) {
+        dom.ripLayer.dataset.open = 'false';
+        dom.ripLayer.replaceChildren();
+      }
+      if (dom.panel) {
+        delete dom.panel.dataset.launch;
+        delete dom.panel.dataset.jumping;
+      }
+      if (dom.figure) delete dom.figure.dataset.thrust;
+      if (dom.root) delete dom.root.dataset.shake;
+      JourneyPortal.deactivate();
     },
   };

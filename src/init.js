@@ -4,6 +4,7 @@
     Settings.load();
     injectStyles();
     createRoot();
+    reserveScrollRoom();
     Phase.set(PHASES.IDLE);
     bindEvents();
     Trail.init();

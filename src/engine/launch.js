@@ -18,6 +18,7 @@
       return;
     }
 
+    runtime.abortRequested = false;
     Storage.saveRoute(route, {active: true, currentIndex});
     dom.beginButton.disabled = true;
 
@@ -30,14 +31,32 @@
     // page. resume() then continues the flight; the first hop skips the dock-exit because
     // the ship is already airborne off the panel top. LaunchSequence is pure FX — this
     // function (the engine side) owns the phase transitions and status narration.
+    // Each step is followed by a checkpoint: Abort is live from the first beat of the
+    // countdown, and an aborted launch must not carry on into the next step.
     const reduce = prefersReducedMotion();
-    Phase.set(PHASES.COUNTDOWN);
-    await LaunchSequence.arm(reduce);
-    await LaunchSequence.countdown(reduce, (n) => setStatus(`Launch in ${n}…`));
-    await LaunchSequence.spoolUp(reduce);
-    Phase.set(PHASES.LAUNCHING);
-    setStatus('Launch!');
-    await LaunchSequence.liftoff(reduce);
+    try {
+      Phase.set(PHASES.COUNTDOWN);
+      await LaunchSequence.arm(reduce);
+      Traversal.checkpoint();
+      await LaunchSequence.countdown(reduce, (n) => {
+        if (runtime.abortRequested) return false;
+        setStatus(`Launch in ${n}…`);
+        return true;
+      });
+      Traversal.checkpoint();
+      await LaunchSequence.spoolUp(reduce);
+      Traversal.checkpoint();
+      Phase.set(PHASES.LAUNCHING);
+      setStatus('Launch!');
+      await LaunchSequence.liftoff(reduce);
+      Traversal.checkpoint();
+    } catch (error) {
+      if (error instanceof FlightAbandoned) {
+        Traversal.settleAbort();
+        return;
+      }
+      throw error;
+    }
 
     await Traversal.resume();
   }

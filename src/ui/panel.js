@@ -47,15 +47,19 @@
         </div>
         <div class="wikinaut-field">
           <label class="wikinaut-label" for="wikinaut-target-input">Set coordinates</label>
-          <input id="wikinaut-target-input" type="text" autocomplete="off" placeholder="Destination article — Philosophy, Cat, Moon…" />
+          <input id="wikinaut-target-input" type="text" autocomplete="off"
+            role="combobox" aria-autocomplete="list" aria-expanded="false"
+            aria-controls="wikinaut-suggestions" aria-describedby="wikinaut-input-hint"
+            placeholder="Destination article — Philosophy, Cat, Moon…" />
           <div id="wikinaut-suggestions" role="listbox" aria-label="Wikipedia article suggestions"></div>
-          <div id="wikinaut-input-hint" data-state="idle" aria-live="polite"></div>
+          <div id="wikinaut-input-hint" class="wikinaut-hint" data-state="idle" aria-live="polite"></div>
         </div>
         <button id="wikinaut-chart-button" class="wikinaut-button" type="button" disabled>Chart Course</button>
         <button id="wikinaut-begin-button" class="wikinaut-button secondary" type="button" disabled>Launch</button>
-        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.5 1.5M11.2 11.2l1.5 1.5M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5"></path></svg></button>
-        <div id="wikinaut-route-card" aria-live="polite">
-          <div id="wikinaut-status">Set a destination and chart a course through Wikipedia.</div>
+        <button id="wikinaut-settings-button" class="wikinaut-button secondary icon" type="button" title="Console settings"
+          aria-label="Console settings" aria-controls="wikinaut-settings-section" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="2.4"></circle><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.5 1.5M11.2 11.2l1.5 1.5M12.7 3.3l-1.5 1.5M4.8 11.2l-1.5 1.5"></path></svg></button>
+        <div id="wikinaut-route-card">
+          <div id="wikinaut-status" role="status">${IDLE_STATUS}</div>
           <div id="wikinaut-route-pager" hidden>
             <button id="wikinaut-route-prev" class="wikinaut-button secondary icon" type="button"
               title="Previous route" aria-label="Previous route"><svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 1.5 3 5l3.5 3.5"></path></svg></button>
@@ -65,12 +69,14 @@
           </div>
           <div id="wikinaut-starmap"></div>
           <div id="wikinaut-freshness"></div>
-          <div id="wikinaut-countdown" data-on="false" aria-live="assertive"></div>
+          <div id="wikinaut-countdown" data-on="false" aria-hidden="true"></div>
         </div>
-        <div id="wikinaut-settings-section" hidden aria-label="Console settings">
+        <div id="wikinaut-settings-section" hidden role="group" aria-label="Console settings">
           <div class="wikinaut-settings-row">
             <label class="wikinaut-settings-label" for="wikinaut-backend-input">Backend URL</label>
-            <input type="text" id="wikinaut-backend-input" autocomplete="off" spellcheck="false" />
+            <input type="text" id="wikinaut-backend-input" autocomplete="off" spellcheck="false"
+              aria-describedby="wikinaut-backend-hint" />
+            <div id="wikinaut-backend-hint" class="wikinaut-hint" data-state="idle" aria-live="polite"></div>
           </div>
           <div class="wikinaut-settings-row">
             <label class="wikinaut-settings-label" for="wikinaut-speed-slider">Flight speed</label>
@@ -81,7 +87,7 @@
             <label class="wikinaut-settings-label" for="wikinaut-ship-color">Color</label>
             <input type="color" id="wikinaut-ship-color" class="wikinaut-color-input" />
           </div>
-          <button id="wikinaut-settings-reset" class="wikinaut-button secondary" type="button">Reset</button>
+          <button id="wikinaut-settings-reset" class="wikinaut-button secondary" type="button">Reset speed &amp; color</button>
         </div>
       </section>
     `;
@@ -113,13 +119,39 @@
       speedValue: root.querySelector('#wikinaut-speed-value'),
       travelerColorInput: root.querySelector('#wikinaut-ship-color'),
       settingsReset: root.querySelector('#wikinaut-settings-reset'),
+      backendHint: root.querySelector('#wikinaut-backend-hint'),
     });
+  }
+
+  // The console is fixed over the bottom of the article, so without this the last
+  // panel-height of every page (the footer, the bottom navboxes) could never be scrolled
+  // clear of it. An inert spacer at the end of <body>, tracking the console's height,
+  // gives the page that much more scroll room. It sits below all article content, so
+  // nothing above it moves.
+  function reserveScrollRoom() {
+    if (!dom.panel || typeof ResizeObserver !== 'function') return;
+    const spacer = document.createElement('div');
+    spacer.id = 'wikinaut-spacer';
+    spacer.setAttribute('aria-hidden', 'true');
+    document.body.append(spacer);
+    const bottomGap = 16 + 8;   // the console's bottom offset, plus a little air
+    new ResizeObserver(() => {
+      spacer.style.height = `${Math.ceil(dom.panel.offsetHeight + bottomGap)}px`;
+      positionToast();
+    }).observe(dom.panel);
   }
 
   function closeSettings() {
     runtime.settingsOpen = false;
     dom.settingsSection.hidden = true;
     dom.settingsButton.setAttribute('aria-expanded', 'false');
+  }
+
+  // Settings feedback lands beside the field it is about, not on the course status line
+  // (where it overwrote "Course locked…"). 'warn' is the signal color; 'info' is quiet.
+  function setBackendHint(text, state) {
+    dom.backendHint.textContent = text;
+    dom.backendHint.dataset.state = state;
   }
 
   function bindEvents() {
@@ -130,17 +162,36 @@
       requestText(`${Backend.url}/ok`).catch(() => {});
     }, {once: true});
     dom.input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (suggestionsOpen()) {
+          event.preventDefault();
+          moveSuggestion(event.key === 'ArrowDown' ? 1 : -1);
+        }
+        return;
+      }
       if (event.key === 'Enter') {
         event.preventDefault();
+        if (commitSuggestionFromKeyboard()) return;
         chartCourse();
       }
       if (event.key === 'Escape') closeSuggestions();
     });
 
     dom.chartButton.addEventListener('click', chartCourse);
-    dom.beginButton.addEventListener('click', beginWalk);
+    dom.beginButton.addEventListener('click', onBeginButton);
     dom.routePrev.addEventListener('click', () => cycleRoute(-1));
     dom.routeNext.addEventListener('click', () => cycleRoute(1));
+
+    // Escape closes the settings drawer from anywhere in it (or on its button), and hands
+    // focus back to the button so a keyboard user isn't dropped at the top of the page.
+    dom.panel.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !runtime.settingsOpen) return;
+      const inSettings =
+        dom.settingsSection.contains(event.target) || event.target === dom.settingsButton;
+      if (!inSettings) return;
+      closeSettings();
+      dom.settingsButton.focus();
+    });
 
     document.addEventListener('click', (event) => {
       if (!dom.suggestions.contains(event.target) && event.target !== dom.input) {
@@ -167,12 +218,10 @@
         // Put the still-active backend back in the field so the box never shows a value
         // that isn't in effect.
         dom.backendInput.value = Backend.override;
-        setStatus('Backend URL must be an https:// address (or http:// on localhost).',
-          {isError: true});
+        setBackendHint('Must be an https:// address (or http:// on localhost).', 'warn');
         return;
       }
-      const where = Backend.override ? Backend.url : `default (${CONFIG.apiBaseUrl})`;
-      setStatus(`Backend set to ${where}.`);
+      setBackendHint(Backend.override ? `Using ${Backend.url}.` : 'Using the default backend.', 'info');
     });
 
     dom.speedSlider.addEventListener('input', () => {

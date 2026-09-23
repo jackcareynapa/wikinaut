@@ -78,8 +78,14 @@
         })
         .join('');
 
+      // The chart is a picture of the route, so its accessible name IS the route.
+      const hops = n - 1;
+      const summary = hops < 1
+        ? `Course: ${route[0]}`
+        : `Course, ${hops} ${hops === 1 ? 'jump' : 'jumps'}: ${route.join(' → ')}`;
+
       host.innerHTML =
-        `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" aria-label="Plotted course star chart">` +
+        `<svg id="wikinaut-starchart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${escapeXml(summary)}">` +
         `${StarMap.graticule()}${StarMap.stars(seed)}${StarMap.alternatesMarkup(alternates, pos)}` +
         `<path id="wikinaut-route-track" d="${d}"></path>` +
         `<path id="wikinaut-route-path" d="${d}"></path>${nodes}</svg>`;
